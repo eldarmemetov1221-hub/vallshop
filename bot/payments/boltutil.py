@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -38,6 +39,8 @@ except ImportError:  # pragma: no cover
     httpx = None  # type: ignore[assignment]
 
 from .base import Invoice, PaymentProvider, PaymentUpdate
+
+log = logging.getLogger("vallshop.boltutil")
 
 MIN_PAYMENT_USDT = Decimal("1.00")
 
@@ -130,7 +133,15 @@ class BoltUtilProvider(PaymentProvider):
             resp = await client.post(
                 self.base_url + path, content=body.encode("utf-8"), headers=headers
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # Логируем причину от BoltUtil (без секретов) — для диагностики.
+                log.error(
+                    "BoltUtil %s -> HTTP %s: %s",
+                    path,
+                    resp.status_code,
+                    resp.text[:500],
+                )
+                resp.raise_for_status()
             data = resp.json()
         # Ответ может быть «плоским» или в конверте {data:{...}}.
         if isinstance(data, dict) and isinstance(data.get("data"), dict):
