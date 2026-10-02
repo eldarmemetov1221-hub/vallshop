@@ -1,0 +1,12 @@
+# Оверлей для сервера, где УЖЕ стоит nginx на портах 80/443.
+# Вебхук отдаём через существующий nginx (см. deploy/nginx-shop.conf.example),
+# а контейнер бота публикует порт ТОЛЬКО на localhost (127.0.0.1), чтобы
+# ничего не конфликтовало и порт не торчал наружу.
+#
+# Запуск:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.nginx.yml up -d --build
+
+services:
+  bot:
+    ports:
+      - "127.0.0.1:8080:8080"
