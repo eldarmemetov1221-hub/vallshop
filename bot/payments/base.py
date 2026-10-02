@@ -57,7 +57,8 @@ class PaymentProvider(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def get_status(self, provider_order_id: str) -> PaymentUpdate:
+    async def get_status(self, ref: str) -> PaymentUpdate:
+        """Статус платежа по ссылке заказа (для BoltUtil — externalOrderId)."""
         ...
 
     @abc.abstractmethod

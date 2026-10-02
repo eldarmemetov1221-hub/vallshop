@@ -119,6 +119,13 @@ async def cb_buy(
             return
         price = sale_price(variant, config.default_markup_percent)
 
+        if price < Decimal("1.00"):
+            await call.answer(
+                "Минимальная сумма оплаты — 1 USDT. Обратитесь к продавцу.",
+                show_alert=True,
+            )
+            return
+
         await order_service.ensure_user(
             session,
             user_id=call.from_user.id,
@@ -206,7 +213,7 @@ async def cb_check(
             await call.answer()
             return
 
-        update = await provider.get_status(payment.provider_order_id)
+        update = await provider.get_status(order.client_ref)
         if update.status != "paid":
             await session.commit()
             await call.answer(texts.PAYMENT_PENDING, show_alert=True)

@@ -43,12 +43,13 @@ class MockProvider(PaymentProvider):
             raw={"mock": True},
         )
 
-    async def get_status(self, provider_order_id: str) -> PaymentUpdate:
+    async def get_status(self, ref: str) -> PaymentUpdate:
         # В mock-режиме сразу «оплачено».
         return PaymentUpdate(
-            provider_order_id=provider_order_id,
+            provider_order_id=ref,
             status="paid",
-            tx_hash="mocktx-" + provider_order_id,
+            client_ref=ref,
+            tx_hash="mocktx-" + ref,
             raw={"mock": True},
         )
 
@@ -59,9 +60,9 @@ class MockProvider(PaymentProvider):
         data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         d = data.get("data", data) if isinstance(data, dict) else {}
         return PaymentUpdate(
-            provider_order_id=str(d.get("orderId") or d.get("id") or ""),
-            status=str(d.get("status") or "paid"),
-            client_ref=d.get("orderId"),
+            provider_order_id=str(d.get("orderToken") or ""),
+            status="paid",
+            client_ref=d.get("externalOrderId"),
             tx_hash=d.get("txHash"),
             raw=data,
         )

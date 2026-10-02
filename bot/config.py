@@ -54,8 +54,8 @@ class BotConfig:
     # Платёжный провайдер.
     bolt_base_url: str = "https://boltutil.com"
     bolt_api_key: Optional[str] = None
+    # Webhook Secret из кабинета BoltUtil — ключ HMAC для запросов и колбэков.
     bolt_secret: Optional[str] = None
-    bolt_webhook_secret: Optional[str] = None
     bolt_network: str = "TRC20"
     # Публичный URL сервиса — для callback (notifyUrl) и редиректа после оплаты.
     public_base_url: Optional[str] = None
@@ -87,7 +87,6 @@ class BotConfig:
             bolt_base_url=_get("BOLT_BASE_URL", "https://boltutil.com"),
             bolt_api_key=_get("BOLT_API_KEY"),
             bolt_secret=_get("BOLT_SECRET"),
-            bolt_webhook_secret=_get("BOLT_WEBHOOK_SECRET"),
             bolt_network=_get("BOLT_NETWORK", "TRC20"),
             public_base_url=_get("PUBLIC_BASE_URL"),
             payment_timeout_minutes=int(_get("PAYMENT_TIMEOUT_MINUTES", "30")),

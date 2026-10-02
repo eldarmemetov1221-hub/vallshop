@@ -41,9 +41,10 @@ def build_app(
             return web.json_response({"ok": False}, status=403)
 
         update = provider.parse_webhook(raw)
-        # Отвечаем 2xx всегда после валидной подписи, обработку делаем идемпотентно.
+        # Обработка идемпотентна. BoltUtil требует РОВНО {"status":"SUCCESS"},
+        # иначе продолжит повторные попытки доставки.
         await _apply_payment(bot, db, liog, update)
-        return web.json_response({"ok": True})
+        return web.json_response({"status": "SUCCESS"})
 
     app.router.add_get("/healthz", healthz)
     app.router.add_post("/bolt/webhook", bolt_webhook)

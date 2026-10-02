@@ -15,8 +15,7 @@ def build_provider(config) -> PaymentProvider:
     return BoltUtilProvider(
         base_url=config.bolt_base_url,
         api_key=config.bolt_api_key,
-        secret=config.bolt_secret,
-        webhook_secret=config.bolt_webhook_secret,
+        secret=config.bolt_secret,  # Webhook Secret — ключ HMAC для всего
         network=config.bolt_network,
         expire_minutes=config.payment_timeout_minutes,
     )
