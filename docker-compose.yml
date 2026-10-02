@@ -1,0 +1,28 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # SQLite-файл храним в volume ./data.
+      DATABASE_URL: sqlite+aiosqlite:////app/data/vallshop.db
+    volumes:
+      - ./data:/app/data
+    ports:
+      # Нужен только при использовании вебхуков (PUBLIC_BASE_URL).
+      - "8080:8080"
+
+  # Вариант с PostgreSQL (при желании): раскомментируйте db и в .env задайте
+  # DATABASE_URL=postgresql+asyncpg://vallshop:vallshop@db:5432/vallshop
+  # db:
+  #   image: postgres:16-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: vallshop
+  #     POSTGRES_PASSWORD: vallshop
+  #     POSTGRES_DB: vallshop
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+
+# volumes:
+#   pgdata:
