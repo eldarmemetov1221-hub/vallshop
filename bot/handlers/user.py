@@ -8,6 +8,7 @@ from decimal import Decimal
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy import select
 
 from ..config import BotConfig
 from ..db import Database
@@ -195,7 +196,9 @@ async def cb_check(
             await call.answer()
             return
 
-        payment = order.payment
+        payment = await session.scalar(
+            select(Payment).where(Payment.order_id == order.id)
+        )
         if payment is None:
             await call.answer("Счёт не найден", show_alert=True)
             return

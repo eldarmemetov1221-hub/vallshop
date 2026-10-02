@@ -43,4 +43,10 @@ async def list_variants(
 
 
 async def get_variant(session: AsyncSession, variant_id: int) -> Optional[Variant]:
-    return await session.get(Variant, variant_id)
+    # Жадно подгружаем product, чтобы обращение к variant.product не вызывало
+    # ленивую загрузку в async-контексте (SQLAlchemy async её не допускает).
+    return await session.scalar(
+        select(Variant)
+        .where(Variant.id == variant_id)
+        .options(selectinload(Variant.product))
+    )

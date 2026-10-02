@@ -66,7 +66,10 @@ async def _apply_payment(bot, db: Database, liog, update) -> None:
             order = await session.scalar(
                 select(Order).where(Order.client_ref == update.client_ref)
             )
-            payment = order.payment if order else None
+            if order is not None:
+                payment = await session.scalar(
+                    select(Payment).where(Payment.order_id == order.id)
+                )
         if payment is None:
             log.warning("Вебхук: платёж не найден (%s)", update.provider_order_id)
             return
