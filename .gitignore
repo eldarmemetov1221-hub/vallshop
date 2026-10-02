@@ -1,0 +1,35 @@
+# Секреты / окружение
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+ENV/
+
+# Тесты / кэши инструментов
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Редакторы / ОС
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Локальные БД / логи (появятся на следующих шагах)
+*.sqlite3
+*.db
+*.log
