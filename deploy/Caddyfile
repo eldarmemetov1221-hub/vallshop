@@ -1,0 +1,20 @@
+# Caddy авто-HTTPS для вебхука BoltUtil.
+# {$DOMAIN} берётся из переменной окружения (см. docker-compose.webhook.yml).
+# Caddy сам получит и будет продлевать TLS-сертификат Let's Encrypt.
+
+{$DOMAIN} {
+	encode gzip
+
+	# Пробрасываем только вебхук и healthcheck на бота (внутренняя сеть compose).
+	handle /bolt/webhook {
+		reverse_proxy bot:8080
+	}
+	handle /healthz {
+		reverse_proxy bot:8080
+	}
+
+	# Всё остальное закрываем.
+	handle {
+		respond "Not found" 404
+	}
+}

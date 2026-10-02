@@ -1,0 +1,29 @@
+# Оверлей для режима с ВЕБХУКОМ BoltUtil (нужен домен, см. deploy/DEPLOY.md).
+# Поднимает Caddy с авто-HTTPS (Let's Encrypt) перед ботом.
+#
+# Запуск:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.webhook.yml up -d --build
+#
+# В .env должны быть заданы:
+#   DOMAIN=shop.example.com
+#   PUBLIC_BASE_URL=https://shop.example.com
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - bot
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

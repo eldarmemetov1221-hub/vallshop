@@ -100,13 +100,15 @@ python -m bot.main               # запустить бота
 
 ## Деплой на сервер
 
-**Docker (рекомендуется):**
+**Docker (рекомендуется):** полная пошаговая инструкция — [`deploy/DEPLOY.md`](./deploy/DEPLOY.md).
 ```bash
-cp .env.example .env   # заполнить
+cp .env.example .env   # заполнить BOT_TOKEN, ADMIN_IDS, BOLT_*
 docker compose up -d --build
 docker compose exec bot python -m scripts.seed_pubg
 ```
 SQLite-файл лежит в `./data` (volume) — сток и заказы переживают пересборку.
+Вебхук BoltUtil (нужен домен) включается оверлеем `deploy/docker-compose.webhook.yml`
+с авто-HTTPS (Caddy) — см. DEPLOY.md, шаг 7.
 
 **systemd:** положи проект в `/opt/vallshop`, создай venv `.venv`, заполни `.env`,
 скопируй `deploy/vallshop-bot.service` в `/etc/systemd/system/`, затем

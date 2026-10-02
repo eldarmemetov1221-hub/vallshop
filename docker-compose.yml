@@ -4,13 +4,13 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # SQLite-файл храним в volume ./data.
+      # SQLite-файл храним в volume ./data (переживает пересборку).
       DATABASE_URL: sqlite+aiosqlite:////app/data/vallshop.db
     volumes:
       - ./data:/app/data
-    ports:
-      # Нужен только при использовании вебхуков (PUBLIC_BASE_URL).
-      - "8080:8080"
+    # Порт наружу НЕ публикуем: для режима без домена он не нужен (оплата —
+    # кнопкой в боте). Для вебхука поднимается Caddy (см. deploy/DEPLOY.md),
+    # который ходит к боту по внутренней сети compose.
 
   # Вариант с PostgreSQL (при желании): раскомментируйте db и в .env задайте
   # DATABASE_URL=postgresql+asyncpg://vallshop:vallshop@db:5432/vallshop
