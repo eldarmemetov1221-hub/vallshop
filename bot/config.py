@@ -52,7 +52,7 @@ class BotConfig:
     default_markup_percent: Decimal = Decimal("0")
 
     # Платёжный провайдер.
-    bolt_base_url: str = "https://boltutil.com"
+    bolt_base_url: str = "https://api.boltutil.com"
     bolt_api_key: Optional[str] = None
     # Webhook Secret из кабинета BoltUtil — ключ HMAC для запросов и колбэков.
     bolt_secret: Optional[str] = None
@@ -84,7 +84,7 @@ class BotConfig:
             database_url=_get("DATABASE_URL", "sqlite+aiosqlite:///vallshop.db"),
             currency=_get("SHOP_CURRENCY", "USDT"),
             default_markup_percent=Decimal(_get("DEFAULT_MARKUP_PERCENT", "0")),
-            bolt_base_url=_get("BOLT_BASE_URL", "https://boltutil.com"),
+            bolt_base_url=_get("BOLT_BASE_URL", "https://api.boltutil.com"),
             bolt_api_key=_get("BOLT_API_KEY"),
             bolt_secret=_get("BOLT_SECRET"),
             bolt_network=_get("BOLT_NETWORK", "TRC20"),
