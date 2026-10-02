@@ -30,13 +30,14 @@ class MockProvider(PaymentProvider):
         description: str,
         notify_url: Optional[str] = None,
         success_url: Optional[str] = None,
+        network: Optional[str] = None,
     ) -> Invoice:
         oid = "mock-" + hashlib.sha256(client_ref.encode()).hexdigest()[:12]
         return Invoice(
             provider_order_id=oid,
             checkout_url=f"https://example.invalid/pay/{oid}",
             address="TMockAddressXXXXXXXXXXXXXXXXXXXXXX",
-            network=self.network,
+            network=(network or self.network),
             amount=amount,
             currency="USDT",
             expires_at=datetime.utcnow() + timedelta(minutes=self.expire_minutes),

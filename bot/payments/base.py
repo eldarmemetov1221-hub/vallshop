@@ -53,6 +53,7 @@ class PaymentProvider(abc.ABC):
         description: str,
         notify_url: Optional[str] = None,
         success_url: Optional[str] = None,
+        network: Optional[str] = None,
     ) -> Invoice:
         ...
 

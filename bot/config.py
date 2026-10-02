@@ -56,7 +56,10 @@ class BotConfig:
     bolt_api_key: Optional[str] = None
     # Webhook Secret из кабинета BoltUtil — ключ HMAC для запросов и колбэков.
     bolt_secret: Optional[str] = None
+    # Сеть по умолчанию (используется, если список сетей не задан).
     bolt_network: str = "TRC20"
+    # Сети USDT, доступные покупателю на выбор. Если пусто — [bolt_network].
+    bolt_networks: List[str] = field(default_factory=list)
     # Публичный URL сервиса — для callback (notifyUrl) и редиректа после оплаты.
     public_base_url: Optional[str] = None
     payment_timeout_minutes: int = 30
@@ -69,6 +72,11 @@ class BotConfig:
         if not self.public_base_url:
             return None
         return self.public_base_url.rstrip("/") + "/bolt/webhook"
+
+    @property
+    def networks(self) -> List[str]:
+        """Список доступных сетей (нормализованный, с дефолтом)."""
+        return self.bolt_networks or [self.bolt_network]
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_ids
@@ -88,6 +96,11 @@ class BotConfig:
             bolt_api_key=_get("BOLT_API_KEY"),
             bolt_secret=_get("BOLT_SECRET"),
             bolt_network=_get("BOLT_NETWORK", "TRC20"),
+            bolt_networks=[
+                n.strip().upper()
+                for n in (_get("BOLT_NETWORKS", "") or "").replace(";", ",").split(",")
+                if n.strip()
+            ],
             public_base_url=_get("PUBLIC_BASE_URL"),
             payment_timeout_minutes=int(_get("PAYMENT_TIMEOUT_MINUTES", "30")),
             mock_payments=_truthy(_get("MOCK_PAYMENTS")),

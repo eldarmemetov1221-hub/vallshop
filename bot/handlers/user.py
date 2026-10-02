@@ -120,11 +120,57 @@ async def cb_buy(
             return
         price = sale_price(variant, config.default_markup_percent)
 
+    if price < Decimal("1.00"):
+        await call.answer(
+            "Минимальная сумма оплаты — 1 USDT. Обратитесь к продавцу.",
+            show_alert=True,
+        )
+        return
+
+    networks = config.networks
+    # Одна сеть — сразу счёт; несколько — предложить выбор.
+    if len(networks) == 1:
+        await _create_invoice(call, db, config, provider, variant_id, networks[0])
+        return
+
+    await call.message.edit_text(
+        f"<b>{variant.title}</b>\n"
+        f"Цена: <b>{texts.money(price, config.currency)}</b>\n\n"
+        "Выберите сеть для оплаты USDT:",
+        reply_markup=kb.networks_kb(variant_id, networks),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("net:"))
+async def cb_pick_network(
+    call: CallbackQuery, db: Database, config: BotConfig, provider: PaymentProvider
+) -> None:
+    _, vid, net = call.data.split(":", 2)
+    net = net.upper()
+    if net not in config.networks:
+        await call.answer("Сеть недоступна", show_alert=True)
+        return
+    await _create_invoice(call, db, config, provider, int(vid), net)
+
+
+async def _create_invoice(
+    call: CallbackQuery,
+    db: Database,
+    config: BotConfig,
+    provider: PaymentProvider,
+    variant_id: int,
+    network: str,
+) -> None:
+    """Создать заказ + счёт в выбранной сети и показать реквизиты."""
+    async with db.session() as session:
+        variant = await catalog_service.get_variant(session, variant_id)
+        if not variant or not variant.is_active:
+            await call.answer("Недоступно", show_alert=True)
+            return
+        price = sale_price(variant, config.default_markup_percent)
         if price < Decimal("1.00"):
-            await call.answer(
-                "Минимальная сумма оплаты — 1 USDT. Обратитесь к продавцу.",
-                show_alert=True,
-            )
+            await call.answer("Минимальная сумма оплаты — 1 USDT.", show_alert=True)
             return
 
         await order_service.ensure_user(
@@ -136,14 +182,28 @@ async def cb_buy(
         order = await order_service.create_order(
             session, user_id=call.from_user.id, variant=variant, price_usd=price
         )
-
-        invoice = await provider.create_invoice(
-            amount=price,
-            client_ref=order.client_ref,
-            description=f"{variant.product.title if variant.product else ''} {variant.title}".strip(),
-            notify_url=config.notify_url,
-            success_url=config.public_base_url,
+        item_name = variant.title
+        description = (
+            f"{variant.product.title if variant.product else ''} {variant.title}".strip()
         )
+
+        try:
+            invoice = await provider.create_invoice(
+                amount=price,
+                client_ref=order.client_ref,
+                description=description,
+                notify_url=config.notify_url,
+                success_url=config.public_base_url,
+                network=network,
+            )
+        except Exception:  # noqa: BLE001
+            await session.rollback()
+            await call.answer(
+                "Не удалось создать счёт. Попробуйте другую сеть или позже.",
+                show_alert=True,
+            )
+            raise
+
         payment = Payment(
             order_id=order.id,
             provider=provider.name,
@@ -159,8 +219,7 @@ async def cb_buy(
         order.status = OrderStatus.AWAITING_PAYMENT
         session.add(payment)
         await session.commit()
-
-        item_name = variant.title
+        order_id = order.id
 
     await call.message.edit_text(
         texts.PAYMENT_CREATED.format(
@@ -169,7 +228,7 @@ async def cb_buy(
             network=invoice.network,
             address=invoice.address,
         ),
-        reply_markup=kb.payment_kb(order.id, invoice.checkout_url),
+        reply_markup=kb.payment_kb(order_id, invoice.checkout_url),
     )
     await call.answer()
 

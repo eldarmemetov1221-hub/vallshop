@@ -156,6 +156,7 @@ class BoltUtilProvider(PaymentProvider):
         description: str,
         notify_url: Optional[str] = None,
         success_url: Optional[str] = None,
+        network: Optional[str] = None,
     ) -> Invoice:
         if Decimal(amount) < MIN_PAYMENT_USDT:
             raise ValueError(
@@ -165,7 +166,7 @@ class BoltUtilProvider(PaymentProvider):
         payload = {
             "amount": f"{Decimal(amount):.6f}".rstrip("0").rstrip("."),
             "currency": "USDT",
-            "network": self.network,
+            "network": (network or self.network),
             "externalOrderId": client_ref,
             "orderDesc": description or client_ref,
         }
