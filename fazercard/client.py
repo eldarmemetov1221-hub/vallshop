@@ -207,7 +207,14 @@ class FazerCardClient:
             items = data.get("items") if isinstance(data, dict) else None
             for it in items or []:
                 if isinstance(it, Mapping):
-                    out.append({"id": it.get("id"), "name": it.get("name") or it.get("title") or it.get("id")})
+                    cid = (
+                        it.get("category_id") or it.get("game_id")
+                        or it.get("id") or it.get("slug")
+                    )
+                    out.append({
+                        "id": cid,
+                        "name": it.get("name") or it.get("title") or cid,
+                    })
             meta = (data.get("meta") if isinstance(data, dict) else None) or {}
             cursor = meta.get("next_cursor")
             if not cursor or not meta.get("has_more") or len(out) >= cap:
@@ -236,7 +243,8 @@ class FazerCardClient:
             if not isinstance(r, Mapping):
                 continue
             out.append({
-                "id": r.get(id_key) or r.get("id"),
+                "id": r.get(id_key) or r.get("id") or r.get("card_id")
+                      or r.get("key_id") or r.get("offer_id"),
                 "name": r.get("name") or r.get("title"),
                 "price_usd": r.get("price_usd") or r.get("price"),
                 "stock": r.get("stock"),
