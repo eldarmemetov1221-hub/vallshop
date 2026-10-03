@@ -71,6 +71,16 @@ async def main() -> None:
 
     dp.include_router(build_root_router())
 
+    # Команды в меню бота (кнопка «/» у поля ввода).
+    from aiogram.types import BotCommand
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Запустить / главное меню"),
+            BotCommand(command="menu", description="Открыть меню"),
+        ])
+    except Exception:  # noqa: BLE001
+        log.warning("Не удалось установить команды меню")
+
     tasks = [
         asyncio.create_task(run_fulfillment_poller(bot, db, liog, fzr)),
         asyncio.create_task(run_topup_poller(bot, db, provider)),
