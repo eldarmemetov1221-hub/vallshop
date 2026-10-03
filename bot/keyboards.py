@@ -65,8 +65,17 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
         _b("Каталог", callback_data="catalog", style="primary", icon=EMOJI["catalog"]),
         _b("Мой профиль", callback_data="profile", style="success", icon=EMOJI["profile"]),
     )
+    kb.row(_b("❓ FAQ / Правила", callback_data="faq"))
     if is_admin:
         kb.row(_b("Админ-панель", callback_data="admin", style="danger", icon=EMOJI["admin"]))
+    return kb.as_markup()
+
+
+def faq_kb(offer_url: Optional[str] = None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if offer_url:
+        kb.row(_b("📄 Публичная оферта", url=offer_url))
+    kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))
     return kb.as_markup()
 
 

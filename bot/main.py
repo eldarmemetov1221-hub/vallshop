@@ -29,7 +29,7 @@ async def _run_web(config: BotConfig, bot, db, provider, liog) -> None:
 
     from .web import build_app
 
-    app = build_app(bot=bot, db=db, provider=provider, liog=liog)
+    app = build_app(bot=bot, db=db, provider=provider, liog=liog, config=config)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", "8080"))

@@ -12,13 +12,14 @@ def _flat(markup):
 
 def test_main_menu_one_row_with_icons_and_colors():
     markup = kb.main_menu_kb()
-    # Каталог и Мой профиль — в одном ряду
-    assert len(markup.inline_keyboard) == 1
+    # Каталог и Мой профиль — в одном (первом) ряду
     catalog, profile = markup.inline_keyboard[0]
     assert catalog.icon_custom_emoji_id == EMOJI["catalog"]
     assert catalog.style == "primary"
     assert profile.icon_custom_emoji_id == EMOJI["profile"]
     assert profile.style == "success"
+    # Есть кнопка FAQ
+    assert any(b.callback_data == "faq" for b in _flat(markup))
 
 
 def test_profile_icons_and_orders_blue():

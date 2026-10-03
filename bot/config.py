@@ -64,6 +64,11 @@ class BotConfig:
     public_base_url: Optional[str] = None
     payment_timeout_minutes: int = 30
 
+    # Контакт поддержки (Telegram @username, ссылка или email) — для оферты/FAQ.
+    support_contact: Optional[str] = None
+    # Юр. данные для оферты (ИП/самозанятый/компания и т.п.) — опционально.
+    legal_entity: Optional[str] = None
+
     # Mock-режим платежей/поставщика (без сети) — для локальной разработки.
     mock_payments: bool = False
 
@@ -72,6 +77,13 @@ class BotConfig:
         if not self.public_base_url:
             return None
         return self.public_base_url.rstrip("/") + "/bolt/webhook"
+
+    @property
+    def offer_url(self) -> Optional[str]:
+        """Публичная ссылка на оферту (если задан публичный домен)."""
+        if not self.public_base_url:
+            return None
+        return self.public_base_url.rstrip("/") + "/offer"
 
     @property
     def networks(self) -> List[str]:
@@ -104,4 +116,6 @@ class BotConfig:
             public_base_url=_get("PUBLIC_BASE_URL"),
             payment_timeout_minutes=int(_get("PAYMENT_TIMEOUT_MINUTES", "30")),
             mock_payments=_truthy(_get("MOCK_PAYMENTS")),
+            support_contact=_get("SUPPORT_CONTACT"),
+            legal_entity=_get("LEGAL_ENTITY"),
         )

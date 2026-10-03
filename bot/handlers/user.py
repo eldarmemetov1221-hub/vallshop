@@ -98,6 +98,19 @@ async def cb_noop(call: CallbackQuery) -> None:
     await call.answer()
 
 
+@router.callback_query(F.data == "faq")
+async def cb_faq(call: CallbackQuery, config: BotConfig, state: FSMContext) -> None:
+    await state.clear()
+    caption = texts.FAQ
+    if not config.offer_url and config.support_contact:
+        caption += texts.FAQ_NO_OFFER.format(support=config.support_contact)
+    await render(
+        call, banner="main", caption=caption,
+        reply_markup=kb.faq_kb(config.offer_url),
+    )
+    await call.answer()
+
+
 @router.callback_query(F.data == "catalog")
 async def cb_catalog(call: CallbackQuery, db: Database, state: FSMContext) -> None:
     await state.clear()

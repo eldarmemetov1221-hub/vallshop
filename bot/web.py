@@ -28,12 +28,21 @@ log = logging.getLogger("vallshop.web")
 
 
 def build_app(
-    *, bot: Bot, db: Database, provider: PaymentProvider, liog: LioGamesClient
+    *, bot: Bot, db: Database, provider: PaymentProvider, liog: LioGamesClient,
+    config=None,
 ) -> web.Application:
     app = web.Application()
 
     async def healthz(request: web.Request) -> web.Response:
         return web.json_response({"ok": True})
+
+    async def offer_page(request: web.Request) -> web.Response:
+        from . import legal
+        return web.Response(text=legal.offer_html(config), content_type="text/html")
+
+    async def landing_page(request: web.Request) -> web.Response:
+        from . import legal
+        return web.Response(text=legal.landing_html(config), content_type="text/html")
 
     async def bolt_webhook(request: web.Request) -> web.Response:
         raw = await request.read()
@@ -48,6 +57,9 @@ def build_app(
         return web.json_response({"status": "SUCCESS"})
 
     app.router.add_get("/healthz", healthz)
+    app.router.add_get("/", landing_page)
+    app.router.add_get("/offer", offer_page)
+    app.router.add_get("/terms", offer_page)   # алиас
     # Принимаем вебхук на нескольких путях — на случай, если в кабинете
     # BoltUtil указан другой (например /bolt/callback).
     for path in ("/bolt/webhook", "/bolt/callback", "/callback"):
