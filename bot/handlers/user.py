@@ -106,7 +106,9 @@ async def cb_faq(call: CallbackQuery, config: BotConfig, state: FSMContext) -> N
         caption += texts.FAQ_NO_OFFER.format(support=config.support_contact)
     await render(
         call, banner="main", caption=caption,
-        reply_markup=kb.faq_kb(config.offer_url),
+        reply_markup=kb.faq_kb(
+            config.offer_url, config.agreement_url, config.privacy_url
+        ),
     )
     await call.answer()
 

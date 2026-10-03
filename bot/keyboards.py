@@ -46,6 +46,8 @@ EMOJI = {
     "check": "6039859895291877126",      # проверить оплату
     "faq": "6030848053177486888",        # FAQ / Правила
     "offer": "6030445631921721471",      # публичная оферта
+    "agreement": "6030445631921721471",  # пользовательское соглашение
+    "privacy": "5935757052042285202",    # политика конфиденциальности
 }
 
 
@@ -73,8 +75,23 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def faq_kb(offer_url: Optional[str] = None) -> InlineKeyboardMarkup:
+def faq_kb(
+    offer_url: Optional[str] = None,
+    agreement_url: Optional[str] = None,
+    privacy_url: Optional[str] = None,
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    # Политика конфиденциальности + Политика соглашения — в один ряд.
+    if privacy_url and agreement_url:
+        kb.row(
+            _b("Политика конфиденциальности", url=privacy_url, icon=EMOJI["privacy"]),
+            _b("Политика соглашения", url=agreement_url, icon=EMOJI["agreement"]),
+        )
+    elif privacy_url:
+        kb.row(_b("Политика конфиденциальности", url=privacy_url, icon=EMOJI["privacy"]))
+    elif agreement_url:
+        kb.row(_b("Политика соглашения", url=agreement_url, icon=EMOJI["agreement"]))
+    # Публичная оферта — снизу.
     if offer_url:
         kb.row(_b("Публичная оферта", url=offer_url, style="success", icon=EMOJI["offer"]))
     kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))

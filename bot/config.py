@@ -78,12 +78,23 @@ class BotConfig:
             return None
         return self.public_base_url.rstrip("/") + "/bolt/webhook"
 
+    def _pub(self, path: str) -> Optional[str]:
+        if not self.public_base_url:
+            return None
+        return self.public_base_url.rstrip("/") + path
+
     @property
     def offer_url(self) -> Optional[str]:
         """Публичная ссылка на оферту (если задан публичный домен)."""
-        if not self.public_base_url:
-            return None
-        return self.public_base_url.rstrip("/") + "/offer"
+        return self._pub("/offer")
+
+    @property
+    def agreement_url(self) -> Optional[str]:
+        return self._pub("/agreement")
+
+    @property
+    def privacy_url(self) -> Optional[str]:
+        return self._pub("/privacy")
 
     @property
     def networks(self) -> List[str]:

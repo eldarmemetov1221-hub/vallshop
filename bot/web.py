@@ -44,6 +44,14 @@ def build_app(
         from . import legal
         return web.Response(text=legal.landing_html(config), content_type="text/html")
 
+    async def agreement_page(request: web.Request) -> web.Response:
+        from . import legal
+        return web.Response(text=legal.agreement_html(config), content_type="text/html")
+
+    async def privacy_page(request: web.Request) -> web.Response:
+        from . import legal
+        return web.Response(text=legal.privacy_html(config), content_type="text/html")
+
     async def bolt_webhook(request: web.Request) -> web.Response:
         raw = await request.read()
         if not provider.verify_webhook(raw, dict(request.headers)):
@@ -60,6 +68,8 @@ def build_app(
     app.router.add_get("/", landing_page)
     app.router.add_get("/offer", offer_page)
     app.router.add_get("/terms", offer_page)   # алиас
+    app.router.add_get("/agreement", agreement_page)
+    app.router.add_get("/privacy", privacy_page)
     # Принимаем вебхук на нескольких путях — на случай, если в кабинете
     # BoltUtil указан другой (например /bolt/callback).
     for path in ("/bolt/webhook", "/bolt/callback", "/callback"):
