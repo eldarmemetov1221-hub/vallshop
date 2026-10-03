@@ -17,8 +17,10 @@ from ..services import catalog as catalog_service
 from ..services import orders as order_service
 from ..services import stock as stock_service
 from ..services.balance import get_balance
-from ..services.orders import InsufficientBalance, OutOfStock
+from ..services.orders import InsufficientBalance, OutOfStock, SupplierError
 from ..services.pricing import sale_price
+from ..db.models import OrderStatus
+from fazercard import FazerCardClient
 from ..ui import render
 from .. import keyboards as kb
 from .. import texts
@@ -127,8 +129,14 @@ async def cb_variant(call: CallbackQuery, db: Database, config: BotConfig) -> No
             return
         price = sale_price(variant, config.default_markup_percent)
         in_stock = await stock_service.available_count(session, variant_id)
+        ondemand = variant.source == "fazercard"
 
-    note = f"в наличии: {in_stock} шт ✅" if in_stock > 0 else texts.OUT_OF_STOCK_NOTE
+    if ondemand:
+        note = "под заказ (выдача за пару минут) ✅"
+    elif in_stock > 0:
+        note = f"в наличии: {in_stock} шт ✅"
+    else:
+        note = texts.OUT_OF_STOCK_NOTE
     caption = (
         f"<b>{variant.title}</b>\n"
         f"Цена: <b>{texts.money(price, config.currency)}</b>\n"
@@ -149,8 +157,9 @@ async def _render_quantity(
         price = sale_price(variant, config.default_markup_percent)
         in_stock = await stock_service.available_count(session, variant_id)
         balance = await get_balance(session, call.from_user.id)
+        ondemand = variant.source == "fazercard"
 
-    if in_stock <= 0:
+    if not ondemand and in_stock <= 0:
         await render(
             call, banner="catalog", caption=texts.OUT_OF_STOCK_FULL,
             reply_markup=kb.buy_kb(variant_id),
@@ -158,9 +167,10 @@ async def _render_quantity(
         await call.answer()
         return
 
-    max_qty = min(in_stock, MAX_QTY_CAP)
+    max_qty = MAX_QTY_CAP if ondemand else min(in_stock, MAX_QTY_CAP)
     qty = max(1, min(qty, max_qty))
     total = price * qty
+    stock_label = "под заказ" if ondemand else in_stock
 
     await render(
         call,
@@ -168,7 +178,7 @@ async def _render_quantity(
         caption=texts.CHOOSE_QUANTITY.format(
             item=variant.title,
             price=texts.money(price, config.currency),
-            stock=in_stock,
+            stock=stock_label,
             balance=texts.money(balance, config.currency),
         ),
         reply_markup=kb.quantity_kb(variant_id, qty, total, config.currency, max_qty),
@@ -189,7 +199,9 @@ async def cb_qty(call: CallbackQuery, db: Database, config: BotConfig) -> None:
 
 
 @router.callback_query(F.data.startswith("confirm:"))
-async def cb_confirm(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+async def cb_confirm(
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient
+) -> None:
     _, vid, n = call.data.split(":", 2)
     variant_id, qty = int(vid), int(n)
 
@@ -197,6 +209,13 @@ async def cb_confirm(call: CallbackQuery, db: Database, config: BotConfig) -> No
         variant = await catalog_service.get_variant(session, variant_id)
         if not variant or not variant.is_active:
             await call.answer("Недоступно", show_alert=True)
+            return
+        # Топапы FazerCard требуют данные игрока — пока только через админа.
+        if variant.source == "fazercard" and variant.fzr_kind == "topup":
+            await call.answer(
+                "Этот товар оформляется через поддержку — напишите админу.",
+                show_alert=True,
+            )
             return
         unit_price = sale_price(variant, config.default_markup_percent)
         await order_service.ensure_user(
@@ -212,6 +231,7 @@ async def cb_confirm(call: CallbackQuery, db: Database, config: BotConfig) -> No
                 variant=variant,
                 unit_price=unit_price,
                 quantity=qty,
+                fzr=fzr,
             )
         except InsufficientBalance:
             await session.rollback()
@@ -231,11 +251,35 @@ async def cb_confirm(call: CallbackQuery, db: Database, config: BotConfig) -> No
                 texts.NOT_ENOUGH_STOCK.format(stock=in_stock), show_alert=True
             )
             return
+        except SupplierError:
+            await session.rollback()
+            await call.answer(
+                "😔 Поставщик временно недоступен, деньги не списаны. "
+                "Попробуйте позже.",
+                show_alert=True,
+            )
+            return
 
+        pending = order.status == OrderStatus.FULFILLING and not codes
         await session.commit()
         total = unit_price * qty
         balance = await get_balance(session, call.from_user.id)
         item_name = variant.title
+
+    if pending:
+        await render(
+            call,
+            banner="catalog",
+            caption=texts.PURCHASE_PENDING.format(
+                item=item_name,
+                qty=qty,
+                total=texts.money(total, config.currency),
+                balance=texts.money(balance, config.currency),
+            ),
+            reply_markup=kb.after_purchase_kb(),
+        )
+        await call.answer("Оформляем ⏳")
+        return
 
     codes_text = "\n".join(f"<code>{c}</code>" for c in codes)
     await render(

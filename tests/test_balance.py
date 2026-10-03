@@ -5,10 +5,30 @@ from decimal import Decimal
 import pytest
 
 from bot.db import Database, Product, Variant
-from bot.db.models import OrderStatus
+from bot.db.models import Order, OrderStatus
 from bot.services import balance as balance_service
 from bot.services import orders as order_service
 from bot.services import stock as stock_service
+from fazercard import FazerCardClient
+
+
+async def _setup_fzr(db, balance="10", kind="gamekey"):
+    async with db.session() as s:
+        p = Product(game="Steam", title="Steam")
+        s.add(p)
+        await s.flush()
+        v = Variant(
+            product_id=p.id, title="Steam 10$",
+            liog_product_id=0, liog_variation_id=-1, cost_usd=Decimal("8.00"),
+            source="fazercard", fzr_kind=kind, fzr_a="cat", fzr_b="card",
+        )
+        s.add(v)
+        await s.flush()
+        await order_service.ensure_user(s, 7, "u", "U")
+        if Decimal(balance) > 0:
+            await balance_service.credit(s, 7, Decimal(balance))
+        await s.commit()
+        return v.id
 
 
 @pytest.fixture
@@ -94,3 +114,78 @@ async def test_purchase_out_of_stock_rolls_back(db):
         await s.rollback()
         assert await balance_service.get_balance(s, 7) == Decimal("100.00")
         assert await stock_service.available_count(s, vid) == 1
+
+
+@pytest.mark.asyncio
+async def test_fazercard_purchase_delivers_instantly(db):
+    vid = await _setup_fzr(db, balance="20")
+    fzr = FazerCardClient(mock=True)
+    async with db.session() as s:
+        v = await s.get(Variant, vid)
+        order, codes = await order_service.purchase_from_balance(
+            s, user_id=7, variant=v, unit_price=Decimal("10"), quantity=2, fzr=fzr
+        )
+        await s.commit()
+        assert order.status == OrderStatus.COMPLETED
+        assert order.supplier == "fazercard"
+        assert codes == ["MOCK-1", "MOCK-2"]
+        assert await balance_service.get_balance(s, 7) == Decimal("0.00")
+
+
+class _FailFzr:
+    """Поставщик, отклоняющий заказ (терминальный failed)."""
+
+    def order_gamekey(self, **kwargs):
+        return {"ok": True, "order": {"id": "x1", "status": "failed"}}
+
+
+@pytest.mark.asyncio
+async def test_fazercard_terminal_failure_rolls_back(db):
+    vid = await _setup_fzr(db, balance="10")
+    async with db.session() as s:
+        v = await s.get(Variant, vid)
+        with pytest.raises(order_service.SupplierError):
+            await order_service.purchase_from_balance(
+                s, user_id=7, variant=v, unit_price=Decimal("10"),
+                quantity=1, fzr=_FailFzr(),
+            )
+        await s.rollback()
+        assert await balance_service.get_balance(s, 7) == Decimal("10.00")
+
+
+class _PendingFzr:
+    """Поставщик, который принимает заказ в обработку (pending)."""
+
+    def __init__(self):
+        self.polls = 0
+
+    def order_gamekey(self, **kwargs):
+        return {"ok": True, "order": {"id": "p1", "status": "processing"}}
+
+    def get_order(self, order_id):
+        self.polls += 1
+        return {"ok": True, "order": {"id": order_id, "status": "completed", "keys": ["LATE-1"]}}
+
+
+@pytest.mark.asyncio
+async def test_fazercard_pending_then_poller_completes(db):
+    vid = await _setup_fzr(db, balance="10")
+    fzr = _PendingFzr()
+    async with db.session() as s:
+        v = await s.get(Variant, vid)
+        order, codes = await order_service.purchase_from_balance(
+            s, user_id=7, variant=v, unit_price=Decimal("10"), quantity=1, fzr=fzr
+        )
+        await s.commit()
+        oid = order.id
+        assert order.status == OrderStatus.FULFILLING
+        assert order.supplier_order_id == "p1"
+        assert codes == []
+
+    # Поллер дотягивает заказ до завершения.
+    async with db.session() as s:
+        fresh = await s.get(Order, oid)
+        status = await order_service.poll_fazercard(s, fresh, fzr)
+        await s.commit()
+        assert status == OrderStatus.COMPLETED
+        assert fresh.delivery_code == "LATE-1"

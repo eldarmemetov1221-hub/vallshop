@@ -12,6 +12,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from liogames import LioGamesClient
+from fazercard import FazerCardClient
 
 from .config import BotConfig
 from .db import Database
@@ -49,6 +50,7 @@ async def main() -> None:
 
     provider = build_provider(config)
     liog = LioGamesClient.from_env()
+    fzr = FazerCardClient.from_env()
 
     bot = Bot(
         token=config.bot_token,
@@ -61,10 +63,11 @@ async def main() -> None:
     dp["db"] = db
     dp["provider"] = provider
     dp["liog"] = liog
+    dp["fzr"] = fzr
 
     dp.include_router(build_root_router())
 
-    tasks = [asyncio.create_task(run_fulfillment_poller(bot, db, liog))]
+    tasks = [asyncio.create_task(run_fulfillment_poller(bot, db, liog, fzr))]
     if config.public_base_url:
         await _run_web(config, bot, db, provider, liog)
 

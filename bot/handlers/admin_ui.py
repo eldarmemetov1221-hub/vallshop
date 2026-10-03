@@ -59,6 +59,7 @@ class AdminUI(StatesGroup):
     set_prod_title = State()
     set_prod_desc = State()
     add_variant_manual = State()
+    add_variant_fzr = State()
 
 
 def _first_custom_emoji(message: Message) -> Optional[str]:
@@ -182,6 +183,7 @@ async def _product_card(session, config: BotConfig, product_id: int):
         _btn("➕ Номинал (LioGames)", f"a_addvar:{product_id}"),
         _btn("➕ Свой номинал", f"a_addvarm:{product_id}"),
     )
+    kb.row(_btn("➕ Номинал FazerCard", f"a_addvarf:{product_id}"))
     kb.row(
         _btn("🙂 Эмодзи", f"a_pemoji:{product_id}"),
         _btn("🔁 Вкл/выкл товар", f"a_tprod:{product_id}"),
@@ -237,7 +239,10 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
         f"Маржа: {texts.money(m, config.currency)}\n"
         f"Сток: <b>{in_stock}</b>\n"
         + (
-            "Тип: свой товар (без LioGames)"
+            f"Тип: FazerCard · {v.fzr_kind} "
+            f"(a={v.fzr_a}, b={v.fzr_b}) · под заказ"
+            if v.source == "fazercard"
+            else "Тип: свой товар (без LioGames)"
             if not v.liog_product_id
             else f"LioGames: product {v.liog_product_id} / variation {v.liog_variation_id}"
         )
@@ -483,6 +488,101 @@ async def msg_add_variant_manual(message: Message, db: Database, state: FSMConte
     kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
     await message.answer(
         f"✅ Свой номинал создан: <b>{parts[0]}</b>\nДобавьте коды в сток.",
+        reply_markup=kb.as_markup(),
+    )
+
+
+# ── Номинал FazerCard (buy-on-demand) ─────────────────────────────────────────
+_FZR_KINDS = {
+    "gamekey": ("ключ игры", "game_id", "key_id"),
+    "giftcard": ("подарочная карта", "category_id", "card_id"),
+    "topup": ("пополнение игры", "category_id", "offer_id"),
+}
+
+
+@router.callback_query(F.data.startswith("a_addvarf:"))
+async def cb_add_variant_fzr(call: CallbackQuery) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("🔑 Ключ игры", f"a_fzrk:{pid}:gamekey"))
+    kb.row(_btn("🎁 Подарочная карта", f"a_fzrk:{pid}:giftcard"))
+    kb.row(_btn("💠 Пополнение игры", f"a_fzrk:{pid}:topup"))
+    kb.row(_btn("⬅️ Назад", f"a_prod:{pid}"))
+    await call.message.edit_text(
+        "➕ <b>Номинал FazerCard</b> (под заказ)\n\nВыберите тип:",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_fzrk:"))
+async def cb_fzr_kind(call: CallbackQuery, state: FSMContext) -> None:
+    _, pid_s, kind = call.data.split(":", 2)
+    pid = int(pid_s)
+    if kind not in _FZR_KINDS:
+        await call.answer("Неизвестный тип", show_alert=True)
+        return
+    label, a_name, b_name = _FZR_KINDS[kind]
+    await state.set_state(AdminUI.add_variant_fzr)
+    await state.update_data(pid=pid, kind=kind)
+    note = ""
+    if kind == "topup":
+        note = (
+            "\n\n⚠️ Топапы требуют данные игрока при покупке — "
+            "самовыдача клиенту пока отключена (продаётся через поддержку)."
+        )
+    await call.message.edit_text(
+        f"➕ <b>FazerCard · {label}</b>\n\nПришлите: "
+        f"<code>Название | {a_name} | {b_name} | закуп_usd [| цена_usd]</code>\n"
+        f"Пример: <code>Steam 10$ | 123 | 456 | 8.50 | 10.00</code>" + note,
+        reply_markup=_cancel_kb(f"a_prod:{pid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.add_variant_fzr)
+async def msg_add_variant_fzr(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    pid = data.get("pid")
+    kind = data.get("kind")
+    parts = [p.strip() for p in (message.text or "").split("|")]
+    if len(parts) < 4:
+        await message.answer("Формат: Название | id_a | id_b | закуп_usd [| цена_usd]")
+        return
+    title, fzr_a, fzr_b = parts[0], parts[1], parts[2]
+    try:
+        cost = Decimal(parts[3].replace(",", "."))
+    except InvalidOperation:
+        await message.answer("закуп_usd — число (например 8.50)")
+        return
+    price = None
+    if len(parts) > 4 and parts[4] not in ("", "-"):
+        try:
+            price = Decimal(parts[4].replace(",", "."))
+        except InvalidOperation:
+            await message.answer("цена_usd — число или -")
+            return
+    async with db.session() as session:
+        min_vid = await session.scalar(
+            select(func.min(Variant.liog_variation_id)).where(Variant.product_id == pid)
+        )
+        new_vid = min(0, int(min_vid or 0)) - 1
+        v = Variant(
+            product_id=pid, title=title,
+            liog_product_id=0, liog_variation_id=new_vid,
+            cost_usd=cost, price_usd=price,
+            source="fazercard", fzr_kind=kind, fzr_a=fzr_a, fzr_b=fzr_b,
+        )
+        session.add(v)
+        await session.commit()
+        vid = v.id
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
+    kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
+    await message.answer(
+        f"✅ Номинал FazerCard создан: <b>{title}</b> ({kind}).\n"
+        "Выдача — под заказ, сток не нужен.",
         reply_markup=kb.as_markup(),
     )
 

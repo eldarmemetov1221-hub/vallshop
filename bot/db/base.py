@@ -49,13 +49,32 @@ class Database:
             ("orders", "quantity", "INTEGER NOT NULL DEFAULT 1"),
             ("products", "icon_emoji_id", "VARCHAR(32)"),
             ("variants", "icon_emoji_id", "VARCHAR(32)"),
+            ("variants", "source", "VARCHAR(16) NOT NULL DEFAULT 'stock'"),
+            ("variants", "fzr_kind", "VARCHAR(16)"),
+            ("variants", "fzr_a", "VARCHAR(64)"),
+            ("variants", "fzr_b", "VARCHAR(64)"),
+            ("orders", "supplier", "VARCHAR(16)"),
+            ("orders", "supplier_order_id", "VARCHAR(64)"),
         ]
+        added_source = False
         for table, column, ddl in wanted:
             if table not in existing_tables:
                 continue
             cols = {c["name"] for c in inspector.get_columns(table)}
             if column not in cols:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                if (table, column) == ("variants", "source"):
+                    added_source = True
+
+        # Бэкофилл источника для уже существующих номиналов LioGames:
+        # всё, что было привязано к реальному product_id (>0), — это liogames.
+        if added_source and "variants" in existing_tables:
+            conn.execute(
+                text(
+                    "UPDATE variants SET source='liogames' "
+                    "WHERE liog_product_id IS NOT NULL AND liog_product_id > 0"
+                )
+            )
 
     async def dispose(self) -> None:
         await self.engine.dispose()

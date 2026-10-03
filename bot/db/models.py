@@ -129,6 +129,14 @@ class Variant(Base):
     # Кастом-эмодзи (custom_emoji_id) для иконки кнопки номинала.
     icon_emoji_id: Mapped[Optional[str]] = mapped_column(String(32))
 
+    # Источник выдачи: "stock" (свой сток), "liogames" (сток+ручная закупка),
+    # "fazercard" (buy-on-demand у FazerCard).
+    source: Mapped[str] = mapped_column(String(16), default="stock")
+    # FazerCard: тип ("gamekey"/"giftcard"/"topup") и идентификаторы оффера.
+    fzr_kind: Mapped[Optional[str]] = mapped_column(String(16))
+    fzr_a: Mapped[Optional[str]] = mapped_column(String(64))  # game_id / category_id
+    fzr_b: Mapped[Optional[str]] = mapped_column(String(64))  # key_id / card_id / offer_id
+
     product: Mapped["Product"] = relationship(back_populates="variants")
     stock_items: Mapped[List["StockItem"]] = relationship(
         back_populates="variant", cascade="all, delete-orphan"
@@ -189,6 +197,9 @@ class Order(Base):
     delivery_code: Mapped[Optional[str]] = mapped_column(Text)
     # Если выдавали через топап у поставщика — его order_id.
     liog_order_id: Mapped[Optional[str]] = mapped_column(String(64))
+    # Поставщик buy-on-demand ("liogames"/"fazercard") и его order_id.
+    supplier: Mapped[Optional[str]] = mapped_column(String(16))
+    supplier_order_id: Mapped[Optional[str]] = mapped_column(String(64))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
