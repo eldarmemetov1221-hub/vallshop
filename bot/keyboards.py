@@ -99,12 +99,14 @@ def faq_kb(
 
 
 # ── Каталог ───────────────────────────────────────────────────────────────────
-def products_kb(products: List[Product]) -> InlineKeyboardMarkup:
+def products_kb(
+    products: List[Product], back: str = "menu", back_text: str = "Меню"
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for p in products:
         icon = getattr(p, "icon_emoji_id", None) or EMOJI["product"]
         kb.row(_b(p.title, callback_data=f"prod:{p.id}", style="primary", icon=icon))
-    kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))
+    kb.row(_b(back_text, callback_data=back, icon=EMOJI["back"]))
     return kb.as_markup()
 
 
@@ -114,6 +116,7 @@ def variants_kb(
     stock: Mapping[int, int],
     currency: str = "USDT",
     product_icon: Optional[str] = None,
+    back: str = "catalog",
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for v in variants:
@@ -131,14 +134,14 @@ def variants_kb(
             note = "" if in_stock > 0 else f" · {OUT_OF_STOCK_NOTE}"
         icon = getattr(v, "icon_emoji_id", None) or product_icon or EMOJI["variant"]
         kb.row(_b(f"{v.title} — {price}{note}", callback_data=f"var:{v.id}", icon=icon))
-    kb.row(_b("Назад", callback_data="catalog", icon=EMOJI["back"]))
+    kb.row(_b("Назад", callback_data=back, icon=EMOJI["back"]))
     return kb.as_markup()
 
 
-def buy_kb(variant_id: int) -> InlineKeyboardMarkup:
+def buy_kb(variant_id: int, back: str = "catalog") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(_b("💳 Купить", callback_data=f"buy:{variant_id}", style="success"))
-    kb.row(_b("Назад", callback_data="catalog", icon=EMOJI["back"]))
+    kb.row(_b("Назад", callback_data=back, icon=EMOJI["back"]))
     return kb.as_markup()
 
 

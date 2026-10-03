@@ -55,6 +55,7 @@ class Database:
             ("variants", "fzr_b", "VARCHAR(64)"),
             ("orders", "supplier", "VARCHAR(16)"),
             ("orders", "supplier_order_id", "VARCHAR(64)"),
+            ("products", "parent_id", "INTEGER"),
         ]
         added_source = False
         for table, column, ddl in wanted:

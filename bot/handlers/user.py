@@ -133,6 +133,23 @@ async def cb_product(
         if not product:
             await call.answer("Товар не найден", show_alert=True)
             return
+        parent_id = product.parent_id
+        children = await catalog_service.list_children(session, product_id)
+        prod_emoji = texts.ce(product.icon_emoji_id or "5298953332079999355", "🎮")
+
+        # Куда вести кнопку «Назад»: к родительской категории или в каталог.
+        back = f"prod:{parent_id}" if parent_id else "catalog"
+
+        if children:
+            caption = f"{prod_emoji} <b>{product.title}</b>"
+            if product.description:
+                caption += f"\n{product.description}"
+            caption += "\n\nВыберите категорию:"
+            markup = kb.products_kb(children, back=back, back_text="Назад")
+            await render(call, banner="catalog", caption=caption, reply_markup=markup)
+            await call.answer()
+            return
+
         variants = await catalog_service.list_variants(session, product_id)
         prices = {v.id: sale_price(v, config.default_markup_percent) for v in variants}
         stock = await stock_service.counts_by_variant(session, [v.id for v in variants])
@@ -145,7 +162,6 @@ async def cb_product(
     stock = dict(stock)
     stock.update(await catalog_service.fazercard_stock(fzr, variants))
 
-    prod_emoji = texts.ce(product.icon_emoji_id or "5298953332079999355", "🎮")
     caption = f"{prod_emoji} <b>{product.title}</b>"
     if product.description:
         caption += f"\n{product.description}"
@@ -156,7 +172,7 @@ async def cb_product(
         caption=caption,
         reply_markup=kb.variants_kb(
             variants, prices, stock, config.currency,
-            product_icon=product.icon_emoji_id,
+            product_icon=product.icon_emoji_id, back=back,
         ),
     )
     await call.answer()
@@ -177,6 +193,7 @@ async def cb_variant(
         price = sale_price(variant, config.default_markup_percent)
         in_stock = await stock_service.available_count(session, variant_id)
         ondemand = variant.source == "fazercard"
+        back = f"prod:{variant.product_id}"
         if ondemand:
             fz = await catalog_service.fazercard_stock(fzr, [variant])
             in_stock = fz.get(variant.id)  # int (реальный сток) или None (неизвестно)
@@ -197,7 +214,7 @@ async def cb_variant(
         f"Цена: <b>{texts.money(price, config.currency)}</b>\n"
         f"Статус: {note}"
     )
-    await render(call, banner="catalog", caption=caption, reply_markup=kb.buy_kb(variant_id))
+    await render(call, banner="catalog", caption=caption, reply_markup=kb.buy_kb(variant_id, back=back))
     await call.answer()
 
 

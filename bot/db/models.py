@@ -87,6 +87,11 @@ class Product(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Подкатегории: товар может быть вложен в родительский товар-категорию.
+    # parent_id IS NULL — товар верхнего уровня.
+    parent_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE")
+    )
     # Кастом-эмодзи (custom_emoji_id) для иконки кнопки товара.
     icon_emoji_id: Mapped[Optional[str]] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

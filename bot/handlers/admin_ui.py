@@ -61,6 +61,7 @@ class AdminUI(StatesGroup):
     set_prod_title = State()
     set_prod_desc = State()
     add_variant_manual = State()
+    add_subcat = State()
     fzr_search = State()
     fzr_price = State()
 
@@ -167,17 +168,23 @@ async def _product_card(session, config: BotConfig, product_id: int):
     product = await session.get(Product, product_id)
     if not product:
         return None, None
+    children = await catalog_service.list_children(session, product_id, only_active=False)
     variants = await catalog_service.list_variants(session, product_id, only_active=False)
     counts = await stock_service.counts_by_variant(session, [v.id for v in variants])
     flag = "🟢 активен" if product.is_active else "🔴 выключен"
     desc = product.description or "— (нет описания)"
+    kind = "📁 категория" if children else "📦 товар"
     caption = (
-        f"📦 <b>{product.title}</b>\n"
+        f"{kind}: <b>{product.title}</b>\n"
         f"Игра: {product.game} · {flag}\n"
         f"Описание: {desc}\n"
-        f"Номиналов: {len(variants)}"
+        f"Подкатегорий: {len(children)} · Номиналов: {len(variants)}"
     )
     kb = InlineKeyboardBuilder()
+    # Подкатегории (навигация вглубь).
+    for c in children:
+        cflag = "🟢" if c.is_active else "🔴"
+        kb.row(_btn(f"{cflag} 📁 {c.title}", f"a_prod:{c.id}"))
     for v in variants:
         vflag = "🟢" if v.is_active else "🔴"
         price = sale_price(v, config.default_markup_percent)
@@ -191,6 +198,7 @@ async def _product_card(session, config: BotConfig, product_id: int):
         _btn("✏️ Название", f"a_ptitle:{product_id}"),
         _btn("📝 Описание", f"a_pdesc:{product_id}"),
     )
+    kb.row(_btn("➕ Подкатегория", f"a_addsub:{product_id}"))
     kb.row(
         _btn("➕ Номинал (LioGames)", f"a_addvar:{product_id}"),
         _btn("➕ Свой номинал", f"a_addvarm:{product_id}"),
@@ -200,7 +208,8 @@ async def _product_card(session, config: BotConfig, product_id: int):
         _btn("🙂 Эмодзи", f"a_pemoji:{product_id}"),
         _btn("🔁 Вкл/выкл товар", f"a_tprod:{product_id}"),
     )
-    kb.row(_btn("⬅️ Назад", "a_prods"))
+    back = f"a_prod:{product.parent_id}" if product.parent_id else "a_prods"
+    kb.row(_btn("⬅️ Назад", back))
     return caption, kb.as_markup()
 
 
@@ -387,6 +396,55 @@ async def msg_add_variant(message: Message, db: Database, state: FSMContext) -> 
     kb.row(_btn("📥 Добавить сток", f"a_astock:{vid}"))
     kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
     await message.answer(f"✅ Номинал создан: <b>{parts[0]}</b>", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_addsub:"))
+async def cb_add_subcat(call: CallbackQuery, state: FSMContext) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.add_subcat)
+    await state.update_data(parent_id=pid)
+    await call.message.edit_text(
+        "➕ <b>Новая подкатегория</b>\n\nПришлите её название "
+        "(например <code>PUBG UC Global</code> или <code>PUBG UC RU</code>).\n"
+        "Можно с описанием: <code>Название | описание</code>.",
+        reply_markup=_cancel_kb(f"a_prod:{pid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.add_subcat)
+async def msg_add_subcat(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    parent_id = data.get("parent_id")
+    parts = [p.strip() for p in (message.text or "").split("|")]
+    title = parts[0] if parts else ""
+    if not title:
+        await message.answer("Название пустое. Пришлите текст.")
+        return
+    desc = parts[1] if len(parts) > 1 and parts[1] else None
+    async with db.session() as session:
+        parent = await session.get(Product, parent_id)
+        if not parent:
+            await state.clear()
+            await message.answer("Родительский товар не найден.")
+            return
+        child = Product(
+            game=parent.game, title=title, description=desc,
+            parent_id=parent_id,
+        )
+        session.add(child)
+        await session.commit()
+        cid = child.id
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("➕ Номинал (LioGames)", f"a_addvar:{cid}"))
+    kb.row(_btn("➕ Номинал FazerCard", f"a_addvarf:{cid}"))
+    kb.row(_btn("⬅️ К подкатегории", f"a_prod:{cid}"))
+    kb.row(_btn("⬅️ К родителю", f"a_prod:{parent_id}"))
+    await message.answer(
+        f"✅ Подкатегория создана: <b>{title}</b>\nДобавьте в неё номиналы.",
+        reply_markup=kb.as_markup(),
+    )
 
 
 @router.callback_query(F.data.startswith("a_ptitle:"))

@@ -54,12 +54,36 @@ async def fazercard_stock(fzr, variants: List[Variant]) -> Dict[int, Optional[in
 
 
 async def list_products(
-    session: AsyncSession, *, only_active: bool = True
+    session: AsyncSession,
+    *,
+    only_active: bool = True,
+    parent_id: Optional[int] = None,
 ) -> List[Product]:
+    """Товары уровня ``parent_id`` (по умолчанию — верхний уровень, parent IS NULL)."""
     stmt = select(Product).order_by(Product.sort_order, Product.id)
+    if parent_id is None:
+        stmt = stmt.where(Product.parent_id.is_(None))
+    else:
+        stmt = stmt.where(Product.parent_id == parent_id)
     if only_active:
         stmt = stmt.where(Product.is_active.is_(True))
     return list(await session.scalars(stmt))
+
+
+async def list_children(
+    session: AsyncSession, parent_id: int, *, only_active: bool = True
+) -> List[Product]:
+    return await list_products(session, only_active=only_active, parent_id=parent_id)
+
+
+async def children_count(session: AsyncSession, parent_id: int) -> int:
+    from sqlalchemy import func
+    return int(
+        await session.scalar(
+            select(func.count()).select_from(Product).where(Product.parent_id == parent_id)
+        )
+        or 0
+    )
 
 
 async def get_product(
