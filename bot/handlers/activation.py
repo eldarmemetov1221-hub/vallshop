@@ -105,13 +105,17 @@ async def msg_code(message: Message, db: Database, state: FSMContext) -> None:
             return
         product = c.product
         instruction = c.instruction or "—"
+    expected = roblox.expected_gamepass_price(roblox.parse_robux_amount(product))
+    price_line = texts.ACT_PRICE_LINE.format(price=expected) if expected else ""
     await state.update_data(code=code, product=product)
     await state.set_state(ActivateFlow.confirm_pass)
     b = InlineKeyboardBuilder()
     b.row(_b("✅ Гейм Пасс Создан", "act_passdone"))
     b.row(_b("⬅️ Отмена", "act_cancel"))
     await message.answer(
-        texts.ACT_CODE_FOUND.format(product=product, instruction=instruction),
+        texts.ACT_CODE_FOUND.format(
+            product=product, instruction=instruction, price_line=price_line
+        ),
         reply_markup=b.as_markup(), link_preview_options=_NOPREV,
     )
 

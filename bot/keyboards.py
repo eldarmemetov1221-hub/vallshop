@@ -49,6 +49,7 @@ EMOJI = {
     "agreement": "6030445631921721471",  # пользовательское соглашение
     "privacy": "5935757052042285202",    # политика конфиденциальности
     "support": "6021618194228187816",    # техподдержка
+    "activate": "5422711448914647622",   # активировать код
 }
 
 SUPPORT_URL = "https://t.me/vallmanager"
@@ -72,7 +73,7 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
         _b("Каталог", callback_data="catalog", style="primary", icon=EMOJI["catalog"]),
         _b("Мой профиль", callback_data="profile", style="success", icon=EMOJI["profile"]),
     )
-    kb.row(_b("🎟 Активировать Код", callback_data="activate", style="primary"))
+    kb.row(_b("Активировать Код", callback_data="activate", style="primary", icon=EMOJI["activate"]))
     kb.row(_b("FAQ / Правила", callback_data="faq", style="danger", icon=EMOJI["faq"]))
     if is_admin:
         kb.row(_b("Админ-панель", callback_data="admin", style="danger", icon=EMOJI["admin"]))

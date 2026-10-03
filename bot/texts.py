@@ -168,10 +168,12 @@ ACT_USED = "❌ Этот код уже активирован. Если это �
 ACT_PENDING = "⏳ Этот код уже на проверке. Ожидайте решения."
 ACT_CODE_FOUND = (
     "✅ <b>Код найден!</b>\n"
-    "📦 Товар: <b>{product}</b>\n\n"
-    "🏷 Необходимо создать Game Pass. Следуйте инструкции:\n\n{instruction}\n\n"
+    "📦 Товар: <b>{product}</b>\n"
+    "{price_line}"
+    "\n🏷 Необходимо создать Game Pass. Следуйте инструкции:\n\n{instruction}\n\n"
     "Когда создадите — нажмите «Гейм Пасс Создан»."
 )
+ACT_PRICE_LINE = "💰 Цена Game Pass: установите <b>{price}</b> Robux\n"
 ACT_ASK_NICK = (
     "Отправьте свой игровой никнейм Roblox (можно с @).\n"
     "Как узнать ник: https://telegra.ph/Kak-Uznat-svoj-niknejm-09-04"
