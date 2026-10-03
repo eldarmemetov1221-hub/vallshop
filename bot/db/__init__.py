@@ -9,6 +9,8 @@ from .models import (
     Product,
     StockItem,
     StockStatus,
+    TopUp,
+    TopUpStatus,
     User,
     Variant,
 )
@@ -21,6 +23,8 @@ __all__ = [
     "Variant",
     "StockItem",
     "StockStatus",
+    "TopUp",
+    "TopUpStatus",
     "Order",
     "OrderStatus",
     "Payment",

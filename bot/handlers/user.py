@@ -1,29 +1,27 @@
-"""Пользовательские хендлеры: каталог, покупка, оплата, выдача."""
+"""Пользовательские хендлеры: каталог и покупка с баланса (с количеством)."""
 
 from __future__ import annotations
 
-from datetime import datetime
 from decimal import Decimal
 
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
 
 from ..config import BotConfig
 from ..db import Database
-from ..db.models import Order, OrderStatus, Payment, PaymentStatus
-from ..payments import PaymentProvider
 from ..services import catalog as catalog_service
 from ..services import orders as order_service
 from ..services import stock as stock_service
+from ..services.balance import get_balance
+from ..services.orders import InsufficientBalance, OutOfStock
 from ..services.pricing import sale_price
 from .. import keyboards as kb
 from .. import texts
 
-from liogames import LioGamesClient
-
 router = Router()
+
+MAX_QTY_CAP = 50  # верхний предел количества за одну покупку
 
 
 @router.message(CommandStart())
@@ -36,13 +34,29 @@ async def cmd_start(message: Message, db: Database) -> None:
             full_name=message.from_user.full_name,
         )
         await session.commit()
+    await message.answer(texts.START, reply_markup=kb.main_menu_kb())
+    await _show_catalog(message, db)
+
+
+async def _show_catalog(message: Message, db: Database) -> None:
+    async with db.session() as session:
         products = await catalog_service.list_products(session)
-    text = texts.START
     if not products:
-        await message.answer(text + "\n\n" + texts.CATALOG_EMPTY)
+        await message.answer(texts.CATALOG_EMPTY)
     else:
-        await message.answer(text)
-        await message.answer(texts.CHOOSE_PRODUCT, reply_markup=kb.products_kb(products))
+        await message.answer(
+            texts.CHOOSE_PRODUCT, reply_markup=kb.products_kb(products)
+        )
+
+
+@router.message(F.text == "🛍 Каталог")
+async def msg_catalog(message: Message, db: Database) -> None:
+    await _show_catalog(message, db)
+
+
+@router.callback_query(F.data == "noop")
+async def cb_noop(call: CallbackQuery) -> None:
+    await call.answer()
 
 
 @router.callback_query(F.data == "catalog")
@@ -67,9 +81,7 @@ async def cb_product(call: CallbackQuery, db: Database, config: BotConfig) -> No
             await call.answer("Товар не найден", show_alert=True)
             return
         variants = await catalog_service.list_variants(session, product_id)
-        prices = {
-            v.id: sale_price(v, config.default_markup_percent) for v in variants
-        }
+        prices = {v.id: sale_price(v, config.default_markup_percent) for v in variants}
         stock = await stock_service.counts_by_variant(session, [v.id for v in variants])
 
     if not variants:
@@ -81,8 +93,7 @@ async def cb_product(call: CallbackQuery, db: Database, config: BotConfig) -> No
         header += f"\n{product.description}"
     header += "\n\nВыберите номинал:"
     await call.message.edit_text(
-        header,
-        reply_markup=kb.variants_kb(variants, prices, stock, config.currency),
+        header, reply_markup=kb.variants_kb(variants, prices, stock, config.currency)
     )
     await call.answer()
 
@@ -98,7 +109,7 @@ async def cb_variant(call: CallbackQuery, db: Database, config: BotConfig) -> No
         price = sale_price(variant, config.default_markup_percent)
         in_stock = await stock_service.available_count(session, variant_id)
 
-    note = "в наличии ✅" if in_stock > 0 else texts.OUT_OF_STOCK_NOTE
+    note = f"в наличии: {in_stock} шт ✅" if in_stock > 0 else texts.OUT_OF_STOCK_NOTE
     text = (
         f"<b>{variant.title}</b>\n"
         f"Цена: <b>{texts.money(price, config.currency)}</b>\n"
@@ -108,198 +119,108 @@ async def cb_variant(call: CallbackQuery, db: Database, config: BotConfig) -> No
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("buy:"))
-async def cb_buy(
-    call: CallbackQuery, db: Database, config: BotConfig, provider: PaymentProvider
+async def _render_quantity(
+    call: CallbackQuery, db: Database, config: BotConfig, variant_id: int, qty: int
 ) -> None:
-    variant_id = int(call.data.split(":", 1)[1])
     async with db.session() as session:
         variant = await catalog_service.get_variant(session, variant_id)
         if not variant or not variant.is_active:
             await call.answer("Недоступно", show_alert=True)
             return
         price = sale_price(variant, config.default_markup_percent)
+        in_stock = await stock_service.available_count(session, variant_id)
+        balance = await get_balance(session, call.from_user.id)
 
-    if price < Decimal("1.00"):
-        await call.answer(
-            "Минимальная сумма оплаты — 1 USDT. Обратитесь к продавцу.",
-            show_alert=True,
-        )
+    if in_stock <= 0:
+        await call.message.edit_text(texts.OUT_OF_STOCK_FULL, reply_markup=kb.buy_kb(variant_id))
+        await call.answer()
         return
 
-    networks = config.networks
-    # Одна сеть — сразу счёт; несколько — предложить выбор.
-    if len(networks) == 1:
-        await _create_invoice(call, db, config, provider, variant_id, networks[0])
-        return
+    max_qty = min(in_stock, MAX_QTY_CAP)
+    qty = max(1, min(qty, max_qty))
+    total = price * qty
 
     await call.message.edit_text(
-        f"<b>{variant.title}</b>\n"
-        f"Цена: <b>{texts.money(price, config.currency)}</b>\n\n"
-        "Выберите сеть для оплаты USDT:",
-        reply_markup=kb.networks_kb(variant_id, networks),
+        texts.CHOOSE_QUANTITY.format(
+            item=variant.title,
+            price=texts.money(price, config.currency),
+            stock=in_stock,
+            balance=texts.money(balance, config.currency),
+        ),
+        reply_markup=kb.quantity_kb(variant_id, qty, total, config.currency, max_qty),
     )
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("net:"))
-async def cb_pick_network(
-    call: CallbackQuery, db: Database, config: BotConfig, provider: PaymentProvider
-) -> None:
-    _, vid, net = call.data.split(":", 2)
-    net = net.upper()
-    if net not in config.networks:
-        await call.answer("Сеть недоступна", show_alert=True)
-        return
-    await _create_invoice(call, db, config, provider, int(vid), net)
+@router.callback_query(F.data.startswith("buy:"))
+async def cb_buy(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    variant_id = int(call.data.split(":", 1)[1])
+    await _render_quantity(call, db, config, variant_id, 1)
 
 
-async def _create_invoice(
-    call: CallbackQuery,
-    db: Database,
-    config: BotConfig,
-    provider: PaymentProvider,
-    variant_id: int,
-    network: str,
-) -> None:
-    """Создать заказ + счёт в выбранной сети и показать реквизиты."""
+@router.callback_query(F.data.startswith("qty:"))
+async def cb_qty(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    _, vid, n = call.data.split(":", 2)
+    await _render_quantity(call, db, config, int(vid), int(n))
+
+
+@router.callback_query(F.data.startswith("confirm:"))
+async def cb_confirm(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    _, vid, n = call.data.split(":", 2)
+    variant_id, qty = int(vid), int(n)
+
     async with db.session() as session:
         variant = await catalog_service.get_variant(session, variant_id)
         if not variant or not variant.is_active:
             await call.answer("Недоступно", show_alert=True)
             return
-        price = sale_price(variant, config.default_markup_percent)
-        if price < Decimal("1.00"):
-            await call.answer("Минимальная сумма оплаты — 1 USDT.", show_alert=True)
-            return
-
+        unit_price = sale_price(variant, config.default_markup_percent)
         await order_service.ensure_user(
             session,
             user_id=call.from_user.id,
             username=call.from_user.username,
             full_name=call.from_user.full_name,
         )
-        order = await order_service.create_order(
-            session, user_id=call.from_user.id, variant=variant, price_usd=price
-        )
-        item_name = variant.title
-        description = (
-            f"{variant.product.title if variant.product else ''} {variant.title}".strip()
-        )
-
         try:
-            invoice = await provider.create_invoice(
-                amount=price,
-                client_ref=order.client_ref,
-                description=description,
-                notify_url=config.notify_url,
-                success_url=config.public_base_url,
-                network=network,
+            order, codes = await order_service.purchase_from_balance(
+                session,
+                user_id=call.from_user.id,
+                variant=variant,
+                unit_price=unit_price,
+                quantity=qty,
             )
-        except Exception:  # noqa: BLE001
+        except InsufficientBalance:
             await session.rollback()
+            balance = await get_balance(session, call.from_user.id)
             await call.answer(
-                "Не удалось создать счёт. Попробуйте другую сеть или позже.",
+                texts.NOT_ENOUGH_BALANCE.format(
+                    total=texts.money(unit_price * qty, config.currency),
+                    balance=texts.money(balance, config.currency),
+                ),
                 show_alert=True,
             )
-            raise
+            return
+        except OutOfStock:
+            await session.rollback()
+            in_stock = await stock_service.available_count(session, variant_id)
+            await call.answer(
+                texts.NOT_ENOUGH_STOCK.format(stock=in_stock), show_alert=True
+            )
+            return
 
-        payment = Payment(
-            order_id=order.id,
-            provider=provider.name,
-            provider_order_id=invoice.provider_order_id,
-            checkout_url=invoice.checkout_url,
-            address=invoice.address,
-            network=invoice.network,
-            amount=invoice.amount,
-            currency=invoice.currency,
-            status=PaymentStatus.PENDING,
-            expires_at=invoice.expires_at,
-        )
-        order.status = OrderStatus.AWAITING_PAYMENT
-        session.add(payment)
         await session.commit()
-        order_id = order.id
+        total = unit_price * qty
+        balance = await get_balance(session, call.from_user.id)
+        item_name = variant.title
 
+    codes_text = "\n".join(f"<code>{c}</code>" for c in codes)
     await call.message.edit_text(
-        texts.PAYMENT_CREATED.format(
+        texts.PURCHASE_SUCCESS.format(
             item=item_name,
-            amount=texts.money(invoice.amount, invoice.currency),
-            network=invoice.network,
-            address=invoice.address,
-        ),
-        reply_markup=kb.payment_kb(order_id, invoice.checkout_url),
-    )
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("check:"))
-async def cb_check(
-    call: CallbackQuery,
-    db: Database,
-    config: BotConfig,
-    provider: PaymentProvider,
-    liog: LioGamesClient,
-) -> None:
-    order_id = int(call.data.split(":", 1)[1])
-    async with db.session() as session:
-        order = await session.get(Order, order_id)
-        if not order or order.user_id != call.from_user.id:
-            await call.answer("Заказ не найден", show_alert=True)
-            return
-
-        if order.status == OrderStatus.COMPLETED and order.delivery_code:
-            await call.message.answer(
-                texts.DELIVERY_SUCCESS.format(code=order.delivery_code)
-            )
-            await call.answer()
-            return
-
-        payment = await session.scalar(
-            select(Payment).where(Payment.order_id == order.id)
+            qty=qty,
+            total=texts.money(total, config.currency),
+            balance=texts.money(balance, config.currency),
+            codes=codes_text,
         )
-        if payment is None:
-            await call.answer("Счёт не найден", show_alert=True)
-            return
-
-        # Просрочка?
-        if (
-            payment.expires_at
-            and datetime.utcnow() > payment.expires_at
-            and payment.status == PaymentStatus.PENDING
-        ):
-            payment.status = PaymentStatus.EXPIRED
-            order.status = OrderStatus.EXPIRED
-            await session.commit()
-            await call.message.edit_text(texts.PAYMENT_EXPIRED)
-            await call.answer()
-            return
-
-        update = await provider.get_status(order.client_ref)
-        if update.status != "paid":
-            await session.commit()
-            await call.answer(texts.PAYMENT_PENDING, show_alert=True)
-            return
-
-        # Оплачено -> фиксируем и выдаём.
-        payment.status = PaymentStatus.PAID
-        payment.tx_hash = update.tx_hash
-        payment.paid_at = datetime.utcnow()
-        order.status = OrderStatus.PAID
-        await session.flush()
-
-        variant = await catalog_service.get_variant(session, order.variant_id)
-        status = await order_service.fulfill(session, order, variant, liog)
-        await session.commit()
-
-        if status == OrderStatus.COMPLETED and order.delivery_code:
-            await call.message.edit_text(
-                texts.DELIVERY_SUCCESS.format(code=order.delivery_code)
-            )
-        elif status == OrderStatus.FULFILLING:
-            await call.message.edit_text(texts.FULFILLING)
-        else:
-            await call.message.edit_text(
-                texts.FULFILL_FAILED.format(ref=order.client_ref)
-            )
-    await call.answer()
+    )
+    await call.answer("Готово ✅")

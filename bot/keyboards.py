@@ -1,17 +1,38 @@
-"""Inline-клавиатуры."""
+"""Клавиатуры бота.
+
+Примечание: цвет inline-кнопок в Telegram менять нельзя (все кнопки одного
+цвета темы). «Цвета» из ТЗ переданы цветными кружками-эмодзи:
+🟢 светло-зелёный, 🔴 светло-красный, 🟡 жёлтый, ⚪ светло-серый/обычный.
+"""
 
 from __future__ import annotations
 
 from decimal import Decimal
 from typing import List, Mapping
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .db.models import Product, Variant
 from .texts import OUT_OF_STOCK_NOTE, money
 
 
+# ── Главное меню (нижняя reply-клавиатура) ────────────────────────────────────
+def main_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🛍 Каталог"), KeyboardButton(text="🟢 Мой профиль")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+# ── Каталог ───────────────────────────────────────────────────────────────────
 def products_kb(products: List[Product]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for p in products:
@@ -47,7 +68,29 @@ def buy_kb(variant_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-# Человекочитаемые названия сетей USDT.
+def quantity_kb(
+    variant_id: int, qty: int, total: Decimal, currency: str, max_qty: int
+) -> InlineKeyboardMarkup:
+    """Степпер количества (−/N/+) + кнопка подтверждения покупки."""
+    kb = InlineKeyboardBuilder()
+    dec = f"qty:{variant_id}:{qty - 1}" if qty > 1 else "noop"
+    inc = f"qty:{variant_id}:{qty + 1}" if qty < max_qty else "noop"
+    kb.row(
+        InlineKeyboardButton(text="➖", callback_data=dec),
+        InlineKeyboardButton(text=f"{qty} шт", callback_data="noop"),
+        InlineKeyboardButton(text="➕", callback_data=inc),
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text=f"✅ Купить за {money(total, currency)}",
+            callback_data=f"confirm:{variant_id}:{qty}",
+        )
+    )
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"var:{variant_id}"))
+    return kb.as_markup()
+
+
+# ── Названия сетей ────────────────────────────────────────────────────────────
 NETWORK_LABELS = {
     "TRC20": "TRON (TRC20)",
     "BEP20": "BNB Chain (BEP20)",
@@ -55,32 +98,53 @@ NETWORK_LABELS = {
     "POLYGON": "Polygon",
     "SOLANA": "Solana",
 }
+# Цветовые кружки под сети (из ТЗ).
+NETWORK_DOTS = {"TRC20": "🔴", "BEP20": "🟡", "ERC20": "⚪", "POLYGON": "🟣", "SOLANA": "🟢"}
 
 
 def network_label(net: str) -> str:
     return NETWORK_LABELS.get(net.upper(), net.upper())
 
 
-def networks_kb(variant_id: int, networks: list[str]) -> InlineKeyboardMarkup:
+# ── Профиль ───────────────────────────────────────────────────────────────────
+def profile_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for net in networks:
-        kb.row(
-            InlineKeyboardButton(
-                text=f"USDT · {network_label(net)}",
-                callback_data=f"net:{variant_id}:{net.upper()}",
-            )
-        )
-    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"var:{variant_id}"))
+    kb.row(InlineKeyboardButton(text="🔴 Мой баланс", callback_data="balance"))
+    kb.row(InlineKeyboardButton(text="🟡 Мои заказы", callback_data="myorders"))
+    kb.row(InlineKeyboardButton(text="📜 История пополнений", callback_data="mytopups"))
     return kb.as_markup()
 
 
-def payment_kb(order_id: int, checkout_url: str | None) -> InlineKeyboardMarkup:
+def balance_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🟢 Пополнить баланс", callback_data="topup"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="profile"))
+    return kb.as_markup()
+
+
+def topup_networks_kb(networks: list[str]) -> InlineKeyboardMarkup:
+    """Выбор сети для пополнения. Сумма уже сохранена в состоянии FSM."""
+    kb = InlineKeyboardBuilder()
+    for net in networks:
+        dot = NETWORK_DOTS.get(net.upper(), "•")
+        kb.row(
+            InlineKeyboardButton(
+                text=f"{dot} USDT · {network_label(net)}",
+                callback_data=f"tunet:{net.upper()}",
+            )
+        )
+    kb.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="balance"))
+    return kb.as_markup()
+
+
+def topup_payment_kb(topup_id: int, checkout_url: str | None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if checkout_url:
         kb.row(InlineKeyboardButton(text="🌐 Страница оплаты", url=checkout_url))
     kb.row(
         InlineKeyboardButton(
-            text="🔄 Проверить оплату", callback_data=f"check:{order_id}"
+            text="🔄 Проверить оплату", callback_data=f"tucheck:{topup_id}"
         )
     )
+    kb.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="profile"))
     return kb.as_markup()

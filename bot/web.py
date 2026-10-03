@@ -17,8 +17,9 @@ from sqlalchemy import select
 from liogames import LioGamesClient
 
 from .db import Database
-from .db.models import Order, OrderStatus, Payment, PaymentStatus
+from .db.models import Order, OrderStatus, Payment, PaymentStatus, TopUp, TopUpStatus
 from .payments import PaymentProvider
+from .services import balance as balance_service
 from .services import catalog as catalog_service
 from .services import orders as order_service
 from . import texts
@@ -54,6 +55,41 @@ def build_app(
 async def _apply_payment(bot, db: Database, liog, update) -> None:
     if update.status != "paid":
         return
+
+    # Пополнение баланса? (client_ref вида tu-...)
+    ref = update.client_ref or ""
+    if ref.startswith("tu-"):
+        await _apply_topup(bot, db, update)
+        return
+
+    await _apply_order_payment(bot, db, liog, update)
+
+
+async def _apply_topup(bot, db: Database, update) -> None:
+    async with db.session() as session:
+        topup = await balance_service.get_topup_by_ref(session, update.client_ref)
+        if topup is None or topup.status == TopUpStatus.PAID:
+            return  # не найдено или уже зачислено (идемпотентность)
+        topup.status = TopUpStatus.PAID
+        topup.tx_hash = update.tx_hash
+        topup.paid_at = datetime.utcnow()
+        await balance_service.credit(session, topup.user_id, topup.amount_usd)
+        await session.flush()
+        user_id = topup.user_id
+        credit = topup.amount_usd
+        await session.commit()
+        balance = await balance_service.get_balance(session, user_id)
+
+    await _notify(
+        bot,
+        user_id,
+        texts.TOPUP_SUCCESS.format(
+            credit=texts.money(credit), balance=texts.money(balance)
+        ),
+    )
+
+
+async def _apply_order_payment(bot, db: Database, liog, update) -> None:
     async with db.session() as session:
         payment = None
         if update.provider_order_id:

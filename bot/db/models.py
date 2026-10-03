@@ -66,6 +66,8 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String(64))
     full_name: Mapped[Optional[str]] = mapped_column(String(255))
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Баланс пользователя (USD ≈ USDT). Пополняется криптой, тратится на покупки.
+    balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     orders: Mapped[List["Order"]] = relationship(back_populates="user")
@@ -174,11 +176,13 @@ class Order(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     variant_id: Mapped[int] = mapped_column(ForeignKey("variants.id"))
 
+    # Цена за единицу и количество; итог = price_usd * quantity.
     price_usd: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[OrderStatus] = mapped_column(String(24), default=OrderStatus.CREATED)
 
-    # Результат выдачи.
-    delivery_code: Mapped[Optional[str]] = mapped_column(String(255))
+    # Результат выдачи (при количестве >1 — коды построчно).
+    delivery_code: Mapped[Optional[str]] = mapped_column(Text)
     # Если выдавали через топап у поставщика — его order_id.
     liog_order_id: Mapped[Optional[str]] = mapped_column(String(64))
 
@@ -219,3 +223,38 @@ class Payment(Base):
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     order: Mapped["Order"] = relationship(back_populates="payment")
+
+
+class TopUpStatus(str, enum.Enum):
+    PENDING = "pending"
+    PAID = "paid"
+    EXPIRED = "expired"
+    FAILED = "failed"
+
+
+class TopUp(Base):
+    """Пополнение баланса пользователя через BoltUtil (USDT)."""
+
+    __tablename__ = "topups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_ref: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+    amount_usd: Mapped[Decimal] = mapped_column(Numeric(12, 2))  # сколько зачислить
+    status: Mapped[TopUpStatus] = mapped_column(String(16), default=TopUpStatus.PENDING)
+
+    provider: Mapped[str] = mapped_column(String(32), default="boltutil")
+    provider_order_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    checkout_url: Mapped[Optional[str]] = mapped_column(Text)
+    address: Mapped[Optional[str]] = mapped_column(String(128))
+    network: Mapped[Optional[str]] = mapped_column(String(16))
+    pay_amount: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=0)  # сумма к оплате on-chain
+    currency: Mapped[str] = mapped_column(String(8), default="USDT")
+    tx_hash: Mapped[Optional[str]] = mapped_column(String(128))
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+    user: Mapped["User"] = relationship()

@@ -96,6 +96,24 @@ async def reserve_one(
     return await session.get(StockItem, item_id)
 
 
+async def reserve_many(
+    session: AsyncSession, variant_id: int, order_id: int, qty: int
+) -> List[StockItem]:
+    """Зарезервировать qty свободных кодов под заказ.
+
+    Возвращает список зарезервированных позиций (ровно qty), либо пустой список,
+    если не удалось набрать нужное количество (тогда ничего не резервируется —
+    вызывающий код должен откатить транзакцию).
+    """
+    reserved: List[StockItem] = []
+    for _ in range(qty):
+        item = await reserve_one(session, variant_id, order_id)
+        if item is None:
+            return []  # не хватило — откат делает вызывающий
+        reserved.append(item)
+    return reserved
+
+
 async def mark_sold(session: AsyncSession, item: StockItem) -> None:
     item.status = StockStatus.SOLD
     item.sold_at = datetime.utcnow()

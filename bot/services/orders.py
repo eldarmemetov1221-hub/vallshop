@@ -19,7 +19,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from liogames import LioGamesClient
 
 from ..db.models import Order, OrderStatus, User, Variant
+from . import balance as balance_service
 from . import stock as stock_service
+
+
+class PurchaseError(Exception):
+    """Базовая ошибка покупки."""
+
+
+class OutOfStock(PurchaseError):
+    pass
+
+
+class InsufficientBalance(PurchaseError):
+    pass
 
 
 def new_client_ref() -> str:
@@ -42,13 +55,19 @@ async def ensure_user(
 
 
 async def create_order(
-    session: AsyncSession, *, user_id: int, variant: Variant, price_usd: Decimal
+    session: AsyncSession,
+    *,
+    user_id: int,
+    variant: Variant,
+    price_usd: Decimal,
+    quantity: int = 1,
 ) -> Order:
     order = Order(
         client_ref=new_client_ref(),
         user_id=user_id,
         variant_id=variant.id,
         price_usd=price_usd,
+        quantity=quantity,
         status=OrderStatus.CREATED,
     )
     session.add(order)
@@ -56,8 +75,52 @@ async def create_order(
     return order
 
 
+async def purchase_from_balance(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    variant: Variant,
+    unit_price: Decimal,
+    quantity: int,
+) -> tuple[Order, list[str]]:
+    """Купить quantity единиц с баланса и мгновенно выдать коды из стока.
+
+    Бросает OutOfStock / InsufficientBalance. Вызывающий код коммитит при успехе
+    и откатывает при исключении.
+    """
+    total = Decimal(unit_price) * quantity
+
+    order = await create_order(
+        session,
+        user_id=user_id,
+        variant=variant,
+        price_usd=unit_price,
+        quantity=quantity,
+    )
+
+    # 1) Списываем деньги (атомарно, только если хватает).
+    if not await balance_service.try_debit(session, user_id, total):
+        raise InsufficientBalance()
+
+    # 2) Резервируем нужное число кодов.
+    items = await stock_service.reserve_many(session, variant.id, order.id, quantity)
+    if len(items) != quantity:
+        raise OutOfStock()
+
+    # 3) Помечаем проданными и формируем выдачу.
+    codes: list[str] = []
+    for item in items:
+        await stock_service.mark_sold(session, item)
+        codes.append(item.code)
+
+    order.delivery_code = "\n".join(codes)
+    order.status = OrderStatus.COMPLETED
+    await session.flush()
+    return order, codes
+
+
 # ──────────────────────────────────────────────────────────────────────────
-# Выдача
+# Выдача (старый путь: сток + топап-фолбэк, оплата отдельным счётом)
 # ──────────────────────────────────────────────────────────────────────────
 async def fulfill_from_stock(session: AsyncSession, order: Order) -> Optional[str]:
     """Попытаться выдать код из стока. Возвращает код либо None."""
