@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from ..config import BotConfig
 from ..db import Database
@@ -28,6 +28,15 @@ router = Router()
 MAX_QTY_CAP = 50  # верхний предел количества за одну покупку
 
 
+async def _clear_reply_keyboard(message: Message) -> None:
+    """Убрать старую нижнюю reply-клавиатуру (всё меню теперь inline)."""
+    try:
+        m = await message.answer("⌛", reply_markup=ReplyKeyboardRemove())
+        await m.delete()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, db: Database) -> None:
     async with db.session() as session:
@@ -38,6 +47,7 @@ async def cmd_start(message: Message, db: Database) -> None:
             full_name=message.from_user.full_name,
         )
         await session.commit()
+    await _clear_reply_keyboard(message)
     await render(message, banner="catalog", caption=texts.START, reply_markup=kb.main_menu_kb())
 
 

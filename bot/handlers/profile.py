@@ -201,7 +201,7 @@ async def cb_topup_network(
             network=invoice.network,
             address=invoice.address,
         ),
-        reply_markup=kb.topup_payment_kb(topup_id, invoice.checkout_url),
+        reply_markup=kb.topup_payment_kb(topup_id, invoice.checkout_url, invoice.address),
     )
     await call.answer()
 
