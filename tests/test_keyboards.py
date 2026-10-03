@@ -41,3 +41,28 @@ def test_back_buttons_use_back_emoji():
     for markup in (kb.back_profile_kb(), kb.topup_cancel_kb()):
         btn = _flat(markup)[0]
         assert btn.icon_custom_emoji_id == EMOJI["back"]
+
+
+def test_admin_button_only_for_admin():
+    assert all(b.callback_data != "admin" for b in _flat(kb.main_menu_kb(False)))
+    admin_btn = [b for b in _flat(kb.main_menu_kb(True)) if b.callback_data == "admin"][0]
+    assert admin_btn.icon_custom_emoji_id == EMOJI["admin"]
+    assert admin_btn.style == "danger"
+
+
+def test_product_and_variant_icons():
+    from decimal import Decimal as D
+
+    from bot.db.models import Product, Variant
+
+    p = Product(id=1, game="PUBG", title="PUBG Mobile Code (Global)")
+    btn = _flat(kb.products_kb([p]))[0]
+    assert btn.icon_custom_emoji_id == EMOJI["product"]
+
+    v = Variant(
+        id=5, product_id=1, title="325 UC",
+        liog_product_id=66599, liog_variation_id=534125, cost_usd=D("4.44"),
+    )
+    markup = kb.variants_kb([v], {5: D("5.00")}, {5: 3}, "USDT")
+    vbtn = _flat(markup)[0]
+    assert vbtn.icon_custom_emoji_id == EMOJI["variant"]

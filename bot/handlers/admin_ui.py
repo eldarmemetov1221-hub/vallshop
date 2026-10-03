@@ -1,0 +1,506 @@
+"""Инлайн админ-панель (видна только ADMIN_IDS).
+
+Управление каталогом кнопками: товары, номиналы, цена/наценка, сток, видимость,
+заказы. Ввод значений — короткими сообщениями (FSM). Текстовые команды из
+admin.py тоже продолжают работать как запасной вариант.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal, InvalidOperation
+from typing import Optional
+
+from aiogram import F, Router
+from aiogram.filters import BaseFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import func, select
+
+from ..config import BotConfig
+from ..db import Database
+from ..db.models import Order, Product, StockItem, StockStatus, Variant
+from ..services import catalog as catalog_service
+from ..services import stock as stock_service
+from ..services.pricing import margin, sale_price
+from .. import texts
+
+router = Router()
+
+
+class IsAdminCb(BaseFilter):
+    async def __call__(self, call: CallbackQuery, config: BotConfig) -> bool:
+        return bool(call.from_user and config.is_admin(call.from_user.id))
+
+
+class IsAdminMsg(BaseFilter):
+    async def __call__(self, message: Message, config: BotConfig) -> bool:
+        return bool(message.from_user and config.is_admin(message.from_user.id))
+
+
+router.callback_query.filter(IsAdminCb())
+router.message.filter(IsAdminMsg())
+
+
+class AdminUI(StatesGroup):
+    add_product = State()
+    add_variant = State()
+    set_price = State()
+    set_markup = State()
+    add_stock = State()
+
+
+def _btn(text: str, data: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, callback_data=data)
+
+
+# ── Рендер экранов ───────────────────────────────────────────────────────────
+async def _panel_caption(session) -> str:
+    products = await session.scalar(select(func.count()).select_from(Product))
+    variants = await session.scalar(select(func.count()).select_from(Variant))
+    in_stock = await session.scalar(
+        select(func.count()).select_from(StockItem).where(
+            StockItem.status == StockStatus.AVAILABLE
+        )
+    )
+    orders = await session.scalar(select(func.count()).select_from(Order))
+    return (
+        "🛠 <b>Админ-панель VallShop</b>\n\n"
+        f"Товаров: <b>{products}</b>\n"
+        f"Номиналов: <b>{variants}</b>\n"
+        f"Кодов в стоке: <b>{in_stock}</b>\n"
+        f"Заказов: <b>{orders}</b>"
+    )
+
+
+def _panel_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("📦 Товары", "a_prods"))
+    kb.row(_btn("➕ Добавить товар", "a_addprod"))
+    kb.row(_btn("🧾 Заказы", "a_orders"), _btn("📥 Сток", "a_stock"))
+    kb.row(_btn("⬅️ Меню", "menu"))
+    return kb.as_markup()
+
+
+async def _show_panel(call: CallbackQuery, db: Database, edit: bool) -> None:
+    async with db.session() as session:
+        caption = await _panel_caption(session)
+    if edit:
+        try:
+            await call.message.edit_text(caption, reply_markup=_panel_kb())
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    await call.message.answer(caption, reply_markup=_panel_kb())
+
+
+@router.callback_query(F.data == "admin")
+async def cb_admin(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    await state.clear()
+    # Открываем панель новым сообщением (меню — это фото, его не edit_text'нуть).
+    await _show_panel(call, db, edit=False)
+    await call.answer()
+
+
+@router.callback_query(F.data == "a_home")
+async def cb_admin_home(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    await state.clear()
+    await _show_panel(call, db, edit=True)
+    await call.answer()
+
+
+# ── Товары ───────────────────────────────────────────────────────────────────
+async def _products_kb(session) -> InlineKeyboardMarkup:
+    products = await catalog_service.list_products(session, only_active=False)
+    kb = InlineKeyboardBuilder()
+    for p in products:
+        flag = "🟢" if p.is_active else "🔴"
+        kb.row(_btn(f"{flag} {p.title}", f"a_prod:{p.id}"))
+    kb.row(_btn("➕ Добавить товар", "a_addprod"))
+    kb.row(_btn("⬅️ Назад", "a_home"))
+    return kb.as_markup()
+
+
+@router.callback_query(F.data == "a_prods")
+async def cb_products(call: CallbackQuery, db: Database) -> None:
+    async with db.session() as session:
+        markup = await _products_kb(session)
+    await call.message.edit_text("📦 <b>Товары</b>\nВыберите товар:", reply_markup=markup)
+    await call.answer()
+
+
+async def _product_card(session, config: BotConfig, product_id: int):
+    product = await session.get(Product, product_id)
+    if not product:
+        return None, None
+    variants = await catalog_service.list_variants(session, product_id, only_active=False)
+    counts = await stock_service.counts_by_variant(session, [v.id for v in variants])
+    flag = "🟢 активен" if product.is_active else "🔴 выключен"
+    caption = (
+        f"📦 <b>{product.title}</b>\n"
+        f"Игра: {product.game} · {flag}\n"
+        f"Номиналов: {len(variants)}"
+    )
+    kb = InlineKeyboardBuilder()
+    for v in variants:
+        vflag = "🟢" if v.is_active else "🔴"
+        price = sale_price(v, config.default_markup_percent)
+        kb.row(
+            _btn(
+                f"{vflag} {v.title} · {texts.money(price, config.currency)} · сток {counts.get(v.id, 0)}",
+                f"a_var:{v.id}",
+            )
+        )
+    kb.row(_btn("➕ Номинал", f"a_addvar:{product_id}"))
+    kb.row(
+        _btn("🔁 Вкл/выкл товар", f"a_tprod:{product_id}"),
+        _btn("⬅️ Назад", "a_prods"),
+    )
+    return caption, kb.as_markup()
+
+
+@router.callback_query(F.data.startswith("a_prod:"))
+async def cb_product(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        caption, markup = await _product_card(session, config, pid)
+    if not caption:
+        await call.answer("Не найдено", show_alert=True)
+        return
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_tprod:"))
+async def cb_toggle_product(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        product = await session.get(Product, pid)
+        if product:
+            product.is_active = not product.is_active
+            await session.commit()
+        caption, markup = await _product_card(session, config, pid)
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer("Готово")
+
+
+# ── Номинал (вариация) ───────────────────────────────────────────────────────
+async def _variant_card(session, config: BotConfig, variant_id: int):
+    v = await session.get(Variant, variant_id)
+    if not v:
+        return None, None, None
+    in_stock = await stock_service.available_count(session, variant_id)
+    price = sale_price(v, config.default_markup_percent)
+    m = margin(v, config.default_markup_percent)
+    vflag = "🟢 активен" if v.is_active else "🔴 выключен"
+    price_src = (
+        f"фикс {texts.money(Decimal(v.price_usd), config.currency)}"
+        if v.price_usd is not None
+        else (f"наценка {v.markup_percent}%" if v.markup_percent is not None
+              else f"наценка по умолчанию {config.default_markup_percent}%")
+    )
+    caption = (
+        f"🧩 <b>{v.title}</b> ({vflag})\n"
+        f"Закуп: {texts.money(Decimal(v.cost_usd or 0), config.currency)}\n"
+        f"Цена продажи: <b>{texts.money(price, config.currency)}</b> ({price_src})\n"
+        f"Маржа: {texts.money(m, config.currency)}\n"
+        f"Сток: <b>{in_stock}</b>\n"
+        f"LioGames: product {v.liog_product_id} / variation {v.liog_variation_id}"
+    )
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        _btn("💲 Цена", f"a_setprice:{variant_id}"),
+        _btn("📈 Наценка", f"a_setmarkup:{variant_id}"),
+    )
+    kb.row(_btn("📥 Добавить сток", f"a_astock:{variant_id}"))
+    kb.row(
+        _btn("🔁 Вкл/выкл", f"a_tvar:{variant_id}"),
+        _btn("⬅️ Назад", f"a_prod:{v.product_id}"),
+    )
+    return caption, kb.as_markup(), v.product_id
+
+
+@router.callback_query(F.data.startswith("a_var:"))
+async def cb_variant(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        caption, markup, _ = await _variant_card(session, config, vid)
+    if not caption:
+        await call.answer("Не найдено", show_alert=True)
+        return
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_tvar:"))
+async def cb_toggle_variant(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if v:
+            v.is_active = not v.is_active
+            await session.commit()
+        caption, markup, _ = await _variant_card(session, config, vid)
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer("Готово")
+
+
+# ── FSM: ввод значений ───────────────────────────────────────────────────────
+def _cancel_kb(back: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ Отмена", back))
+    return kb.as_markup()
+
+
+@router.callback_query(F.data == "a_addprod")
+async def cb_add_product(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminUI.add_product)
+    await call.message.edit_text(
+        "➕ <b>Новый товар</b>\n\nПришлите: <code>игра | Название | описание</code>\n"
+        "Пример: <code>PUBG | PUBG Mobile UC (Global) | коды UC</code>",
+        reply_markup=_cancel_kb("a_home"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.add_product)
+async def msg_add_product(message: Message, db: Database, state: FSMContext) -> None:
+    parts = [p.strip() for p in (message.text or "").split("|")]
+    if len(parts) < 2:
+        await message.answer("Формат: игра | Название [| описание]")
+        return
+    game, title = parts[0], parts[1]
+    desc = parts[2] if len(parts) > 2 else None
+    async with db.session() as session:
+        p = Product(game=game, title=title, description=desc)
+        session.add(p)
+        await session.commit()
+        pid = p.id
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("➕ Добавить номинал", f"a_addvar:{pid}"))
+    kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
+    await message.answer(f"✅ Товар создан: <b>{title}</b>", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_addvar:"))
+async def cb_add_variant(call: CallbackQuery, state: FSMContext) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.add_variant)
+    await state.update_data(pid=pid)
+    await call.message.edit_text(
+        "➕ <b>Новый номинал</b>\n\nПришлите: "
+        "<code>Название | liog_product_id | liog_variation_id | закуп_usd [| цена_usd]</code>\n"
+        "Пример: <code>325 UC | 66599 | 534125 | 4.44</code>",
+        reply_markup=_cancel_kb(f"a_prod:{pid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.add_variant)
+async def msg_add_variant(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    pid = data.get("pid")
+    parts = [p.strip() for p in (message.text or "").split("|")]
+    if len(parts) < 4:
+        await message.answer("Формат: Название | liog_product_id | liog_variation_id | закуп_usd [| цена_usd]")
+        return
+    try:
+        liog_pid = int(parts[1]); liog_vid = int(parts[2]); cost = Decimal(parts[3])
+    except (ValueError, InvalidOperation):
+        await message.answer("liog_product_id/liog_variation_id — числа, закуп — число (4.44)")
+        return
+    price = None
+    if len(parts) > 4 and parts[4] not in ("", "-"):
+        try:
+            price = Decimal(parts[4])
+        except InvalidOperation:
+            await message.answer("цена_usd — число или - ")
+            return
+    async with db.session() as session:
+        v = Variant(
+            product_id=pid, title=parts[0],
+            liog_product_id=liog_pid, liog_variation_id=liog_vid,
+            cost_usd=cost, price_usd=price,
+        )
+        session.add(v)
+        await session.commit()
+        vid = v.id
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("📥 Добавить сток", f"a_astock:{vid}"))
+    kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
+    await message.answer(f"✅ Номинал создан: <b>{parts[0]}</b>", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_setprice:"))
+async def cb_set_price(call: CallbackQuery, state: FSMContext) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.set_price)
+    await state.update_data(vid=vid)
+    await call.message.edit_text(
+        "💲 Пришлите фикс-цену в USDT (например <code>5.50</code>) "
+        "или <code>-</code>, чтобы убрать (считать по наценке).",
+        reply_markup=_cancel_kb(f"a_var:{vid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_price)
+async def msg_set_price(message: Message, db: Database, config: BotConfig, state: FSMContext) -> None:
+    data = await state.get_data()
+    vid = data.get("vid")
+    raw = (message.text or "").strip().replace(",", ".")
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if not v:
+            await state.clear()
+            await message.answer("Номинал не найден")
+            return
+        if raw == "-":
+            v.price_usd = None
+        else:
+            try:
+                v.price_usd = Decimal(raw)
+            except InvalidOperation:
+                await message.answer("Число или -")
+                return
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
+    await message.answer("✅ Цена обновлена", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_setmarkup:"))
+async def cb_set_markup(call: CallbackQuery, state: FSMContext) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.set_markup)
+    await state.update_data(vid=vid)
+    await call.message.edit_text(
+        "📈 Пришлите наценку в % (например <code>20</code>) "
+        "или <code>-</code>, чтобы вернуть наценку по умолчанию.",
+        reply_markup=_cancel_kb(f"a_var:{vid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_markup)
+async def msg_set_markup(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    vid = data.get("vid")
+    raw = (message.text or "").strip().replace(",", ".")
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if not v:
+            await state.clear()
+            await message.answer("Номинал не найден")
+            return
+        if raw == "-":
+            v.markup_percent = None
+        else:
+            try:
+                v.markup_percent = Decimal(raw)
+            except InvalidOperation:
+                await message.answer("Число или -")
+                return
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
+    await message.answer("✅ Наценка обновлена", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_astock:"))
+async def cb_add_stock(call: CallbackQuery, state: FSMContext) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.add_stock)
+    await state.update_data(vid=vid)
+    await call.message.edit_text(
+        "📥 Пришлите коды для стока — по одному в строке.",
+        reply_markup=_cancel_kb(f"a_var:{vid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.add_stock)
+async def msg_add_stock(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    vid = data.get("vid")
+    codes = [ln for ln in (message.text or "").splitlines() if ln.strip()]
+    if not codes:
+        await message.answer("Пусто. Пришлите коды построчно или нажмите Отмена.")
+        return
+    async with db.session() as session:
+        added, skipped = await stock_service.add_codes(session, vid, codes)
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
+    await message.answer(
+        f"✅ Добавлено: {added}" + (f", пропущено дублей: {skipped}" if skipped else ""),
+        reply_markup=kb.as_markup(),
+    )
+
+
+# ── Заказы / сток ────────────────────────────────────────────────────────────
+@router.callback_query(F.data == "a_orders")
+async def cb_orders(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    async with db.session() as session:
+        rows = await session.execute(
+            select(Order, Variant.title)
+            .join(Variant, Variant.id == Order.variant_id)
+            .order_by(Order.id.desc())
+            .limit(15)
+        )
+        items = rows.all()
+    if not items:
+        text = "🧾 Заказов пока нет."
+    else:
+        lines = ["🧾 <b>Последние заказы</b>", ""]
+        for o, vtitle in items:
+            total = Decimal(o.price_usd) * (o.quantity or 1)
+            lines.append(
+                f"#{o.id} · {vtitle} ×{o.quantity or 1} · "
+                f"{texts.money(total, config.currency)} · {o.status} · user {o.user_id}"
+            )
+        text = "\n".join(lines)
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ Назад", "a_home"))
+    await call.message.edit_text(text, reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(F.data == "a_stock")
+async def cb_stock(call: CallbackQuery, db: Database) -> None:
+    async with db.session() as session:
+        rows = await session.execute(
+            select(Variant.title, func.count(StockItem.id))
+            .select_from(Variant)
+            .join(
+                StockItem,
+                (StockItem.variant_id == Variant.id)
+                & (StockItem.status == StockStatus.AVAILABLE),
+                isouter=True,
+            )
+            .group_by(Variant.id)
+            .order_by(Variant.id)
+        )
+        items = rows.all()
+    if not items:
+        text = "📥 Номиналов нет."
+    else:
+        lines = ["📥 <b>Сток (доступно)</b>", ""]
+        for title, cnt in items:
+            lines.append(f"{title}: <b>{cnt or 0}</b>")
+        text = "\n".join(lines)
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ Назад", "a_home"))
+    await call.message.edit_text(text, reply_markup=kb.as_markup())
+    await call.answer()

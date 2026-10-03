@@ -38,6 +38,9 @@ EMOJI = {
     "topups": "6039859895291877126",
     "topup": "5890848474563352982",
     "back": "6039539366177541657",  # назад/отмена/меню
+    "product": "5298953332079999355",   # товар PUBG Mobile
+    "variant": "5242743089327513390",   # номиналы UC
+    "admin": "5778570255555105942",     # админ-панель
 }
 
 
@@ -53,12 +56,14 @@ def _b(
 
 
 # ── Главное меню ──────────────────────────────────────────────────────────────
-def main_menu_kb() -> InlineKeyboardMarkup:
+def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
         _b("Каталог", callback_data="catalog", style="primary", icon=EMOJI["catalog"]),
         _b("Мой профиль", callback_data="profile", style="success", icon=EMOJI["profile"]),
     )
+    if is_admin:
+        kb.row(_b("Админ-панель", callback_data="admin", style="danger", icon=EMOJI["admin"]))
     return kb.as_markup()
 
 
@@ -66,7 +71,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 def products_kb(products: List[Product]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for p in products:
-        kb.row(_b(p.title, callback_data=f"prod:{p.id}", style="primary", icon=EMOJI["catalog"]))
+        kb.row(_b(p.title, callback_data=f"prod:{p.id}", style="primary", icon=EMOJI["product"]))
     kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))
     return kb.as_markup()
 
@@ -82,7 +87,7 @@ def variants_kb(
         price = money(prices[v.id], currency)
         in_stock = stock.get(v.id, 0)
         note = "" if in_stock > 0 else f" · {OUT_OF_STOCK_NOTE}"
-        kb.row(_b(f"{v.title} — {price}{note}", callback_data=f"var:{v.id}"))
+        kb.row(_b(f"{v.title} — {price}{note}", callback_data=f"var:{v.id}", icon=EMOJI["variant"]))
     kb.row(_b("Назад", callback_data="catalog", icon=EMOJI["back"]))
     return kb.as_markup()
 
