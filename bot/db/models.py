@@ -248,6 +248,45 @@ class Payment(Base):
     order: Mapped["Order"] = relationship(back_populates="payment")
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Активация кодов (отдельная ветка: уже оплаченные коды Robux/др.)
+# ──────────────────────────────────────────────────────────────────────────
+class ActivationCode(Base):
+    """Заранее оплаченный код для активации (перенос из robloxbot)."""
+
+    __tablename__ = "activation_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    product: Mapped[str] = mapped_column(String(255))
+    instruction: Mapped[Optional[str]] = mapped_column(Text)
+    robux_amount: Mapped[Optional[int]] = mapped_column(Integer)
+    # "free" (свободен) | "used" (использован)
+    status: Mapped[str] = mapped_column(String(16), default="free")
+    used_by: Mapped[Optional[int]] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class ActivationRequest(Base):
+    """Заявка на проверку активации (ожидает решения админа)."""
+
+    __tablename__ = "activation_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    product: Mapped[Optional[str]] = mapped_column(String(255))
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    username: Mapped[Optional[str]] = mapped_column(String(64))
+    nickname: Mapped[Optional[str]] = mapped_column(String(128))
+    expected_price: Mapped[Optional[int]] = mapped_column(Integer)
+    actual_price: Mapped[Optional[int]] = mapped_column(Integer)
+    # "review" | "approved" | "rejected"
+    status: Mapped[str] = mapped_column(String(16), default="review")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
 class TopUpStatus(str, enum.Enum):
     PENDING = "pending"
     PAID = "paid"

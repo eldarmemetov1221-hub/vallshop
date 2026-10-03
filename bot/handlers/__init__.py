@@ -2,13 +2,14 @@
 
 from aiogram import Router
 
-from . import admin, admin_ui, profile, user
+from . import activation, admin, admin_ui, profile, user
 
 
 def build_root_router() -> Router:
     root = Router()
     root.include_router(admin.router)
     root.include_router(admin_ui.router)
+    root.include_router(activation.router)
     root.include_router(profile.router)
     root.include_router(user.router)
     return root

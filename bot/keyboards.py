@@ -72,6 +72,7 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
         _b("Каталог", callback_data="catalog", style="primary", icon=EMOJI["catalog"]),
         _b("Мой профиль", callback_data="profile", style="success", icon=EMOJI["profile"]),
     )
+    kb.row(_b("🎟 Активировать Код", callback_data="activate", style="primary"))
     kb.row(_b("FAQ / Правила", callback_data="faq", style="danger", icon=EMOJI["faq"]))
     if is_admin:
         kb.row(_b("Админ-панель", callback_data="admin", style="danger", icon=EMOJI["admin"]))
