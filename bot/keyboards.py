@@ -10,26 +10,19 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import List, Mapping
 
-from aiogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-)
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .db.models import Product, Variant
 from .texts import OUT_OF_STOCK_NOTE, money
 
 
-# ── Главное меню (нижняя reply-клавиатура) ────────────────────────────────────
-def main_menu_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🛍 Каталог"), KeyboardButton(text="🟢 Мой профиль")],
-        ],
-        resize_keyboard=True,
-    )
+# ── Главное меню (inline) ─────────────────────────────────────────────────────
+def main_menu_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🛍 Каталог", callback_data="catalog"))
+    kb.row(InlineKeyboardButton(text="🟢 Мой профиль", callback_data="profile"))
+    return kb.as_markup()
 
 
 # ── Каталог ───────────────────────────────────────────────────────────────────
@@ -37,6 +30,7 @@ def products_kb(products: List[Product]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for p in products:
         kb.row(InlineKeyboardButton(text=p.title, callback_data=f"prod:{p.id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Меню", callback_data="menu"))
     return kb.as_markup()
 
 
@@ -112,6 +106,7 @@ def profile_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="🔴 Мой баланс", callback_data="balance"))
     kb.row(InlineKeyboardButton(text="🟡 Мои заказы", callback_data="myorders"))
     kb.row(InlineKeyboardButton(text="📜 История пополнений", callback_data="mytopups"))
+    kb.row(InlineKeyboardButton(text="⬅️ Меню", callback_data="menu"))
     return kb.as_markup()
 
 

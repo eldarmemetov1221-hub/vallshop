@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from aiogram import F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from ..config import BotConfig
@@ -35,10 +35,15 @@ async def cmd_start(message: Message, db: Database) -> None:
         )
         await session.commit()
     await message.answer(texts.START, reply_markup=kb.main_menu_kb())
-    await _show_catalog(message, db)
 
 
-async def _show_catalog(message: Message, db: Database) -> None:
+@router.message(Command("menu"))
+async def cmd_menu(message: Message) -> None:
+    await message.answer(texts.START, reply_markup=kb.main_menu_kb())
+
+
+@router.message(F.text == "🛍 Каталог")
+async def msg_catalog(message: Message, db: Database) -> None:
     async with db.session() as session:
         products = await catalog_service.list_products(session)
     if not products:
@@ -49,9 +54,10 @@ async def _show_catalog(message: Message, db: Database) -> None:
         )
 
 
-@router.message(F.text == "🛍 Каталог")
-async def msg_catalog(message: Message, db: Database) -> None:
-    await _show_catalog(message, db)
+@router.callback_query(F.data == "menu")
+async def cb_menu(call: CallbackQuery) -> None:
+    await call.message.edit_text(texts.START, reply_markup=kb.main_menu_kb())
+    await call.answer()
 
 
 @router.callback_query(F.data == "noop")
