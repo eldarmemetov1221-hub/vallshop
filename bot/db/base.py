@@ -47,6 +47,8 @@ class Database:
         wanted = [
             ("users", "balance", "NUMERIC(12,2) NOT NULL DEFAULT 0"),
             ("orders", "quantity", "INTEGER NOT NULL DEFAULT 1"),
+            ("products", "icon_emoji_id", "VARCHAR(32)"),
+            ("variants", "icon_emoji_id", "VARCHAR(32)"),
         ]
         for table, column, ddl in wanted:
             if table not in existing_tables:

@@ -54,6 +54,18 @@ class AdminUI(StatesGroup):
     set_price = State()
     set_markup = State()
     add_stock = State()
+    set_prod_emoji = State()
+    set_var_emoji = State()
+
+
+def _first_custom_emoji(message: Message) -> Optional[str]:
+    """Вернуть custom_emoji_id первого премиум-эмодзи в сообщении, если есть."""
+    entities = (message.entities or []) + (message.caption_entities or [])
+    for e in entities:
+        cid = getattr(e, "custom_emoji_id", None)
+        if cid:
+            return cid
+    return None
 
 
 def _btn(text: str, data: str) -> InlineKeyboardButton:
@@ -159,9 +171,10 @@ async def _product_card(session, config: BotConfig, product_id: int):
         )
     kb.row(_btn("➕ Номинал", f"a_addvar:{product_id}"))
     kb.row(
+        _btn("🙂 Эмодзи", f"a_pemoji:{product_id}"),
         _btn("🔁 Вкл/выкл товар", f"a_tprod:{product_id}"),
-        _btn("⬅️ Назад", "a_prods"),
     )
+    kb.row(_btn("⬅️ Назад", "a_prods"))
     return caption, kb.as_markup()
 
 
@@ -220,9 +233,10 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
     )
     kb.row(_btn("📥 Добавить сток", f"a_astock:{variant_id}"))
     kb.row(
+        _btn("🙂 Эмодзи", f"a_vemoji:{variant_id}"),
         _btn("🔁 Вкл/выкл", f"a_tvar:{variant_id}"),
-        _btn("⬅️ Назад", f"a_prod:{v.product_id}"),
     )
+    kb.row(_btn("⬅️ Назад", f"a_prod:{v.product_id}"))
     return caption, kb.as_markup(), v.product_id
 
 
@@ -447,6 +461,72 @@ async def msg_add_stock(message: Message, db: Database, state: FSMContext) -> No
         f"✅ Добавлено: {added}" + (f", пропущено дублей: {skipped}" if skipped else ""),
         reply_markup=kb.as_markup(),
     )
+
+
+# ── Эмодзи товара/номинала ───────────────────────────────────────────────────
+_EMOJI_HINT = (
+    "🙂 Пришлите <b>одно премиум-эмодзи</b> (нужен Telegram Premium), "
+    "чтобы поставить его иконкой кнопки, или <code>-</code> чтобы убрать.\n"
+    "Обычные (не премиум) эмодзи иконкой кнопки Telegram не принимает."
+)
+
+
+@router.callback_query(F.data.startswith("a_pemoji:"))
+async def cb_prod_emoji(call: CallbackQuery, state: FSMContext) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.set_prod_emoji)
+    await state.update_data(pid=pid)
+    await call.message.edit_text(_EMOJI_HINT, reply_markup=_cancel_kb(f"a_prod:{pid}"))
+    await call.answer()
+
+
+@router.message(AdminUI.set_prod_emoji)
+async def msg_prod_emoji(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    pid = data.get("pid")
+    raw = (message.text or "").strip()
+    emoji_id = None if raw == "-" else _first_custom_emoji(message)
+    if raw != "-" and emoji_id is None:
+        await message.answer("Не нашёл премиум-эмодзи. Пришлите именно премиум-эмодзи или - ")
+        return
+    async with db.session() as session:
+        p = await session.get(Product, pid)
+        if p:
+            p.icon_emoji_id = emoji_id
+            await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
+    await message.answer("✅ Эмодзи обновлён" if emoji_id else "✅ Эмодзи убран", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_vemoji:"))
+async def cb_var_emoji(call: CallbackQuery, state: FSMContext) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.set_var_emoji)
+    await state.update_data(vid=vid)
+    await call.message.edit_text(_EMOJI_HINT, reply_markup=_cancel_kb(f"a_var:{vid}"))
+    await call.answer()
+
+
+@router.message(AdminUI.set_var_emoji)
+async def msg_var_emoji(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    vid = data.get("vid")
+    raw = (message.text or "").strip()
+    emoji_id = None if raw == "-" else _first_custom_emoji(message)
+    if raw != "-" and emoji_id is None:
+        await message.answer("Не нашёл премиум-эмодзи. Пришлите именно премиум-эмодзи или - ")
+        return
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if v:
+            v.icon_emoji_id = emoji_id
+            await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
+    await message.answer("✅ Эмодзи обновлён" if emoji_id else "✅ Эмодзи убран", reply_markup=kb.as_markup())
 
 
 # ── Заказы / сток ────────────────────────────────────────────────────────────

@@ -71,7 +71,8 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
 def products_kb(products: List[Product]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for p in products:
-        kb.row(_b(p.title, callback_data=f"prod:{p.id}", style="primary", icon=EMOJI["product"]))
+        icon = getattr(p, "icon_emoji_id", None) or EMOJI["product"]
+        kb.row(_b(p.title, callback_data=f"prod:{p.id}", style="primary", icon=icon))
     kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))
     return kb.as_markup()
 
@@ -87,7 +88,8 @@ def variants_kb(
         price = money(prices[v.id], currency)
         in_stock = stock.get(v.id, 0)
         note = "" if in_stock > 0 else f" · {OUT_OF_STOCK_NOTE}"
-        kb.row(_b(f"{v.title} — {price}{note}", callback_data=f"var:{v.id}", icon=EMOJI["variant"]))
+        icon = getattr(v, "icon_emoji_id", None) or EMOJI["variant"]
+        kb.row(_b(f"{v.title} — {price}{note}", callback_data=f"var:{v.id}", icon=icon))
     kb.row(_b("Назад", callback_data="catalog", icon=EMOJI["back"]))
     return kb.as_markup()
 

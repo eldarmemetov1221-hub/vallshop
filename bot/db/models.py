@@ -87,6 +87,8 @@ class Product(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Кастом-эмодзи (custom_emoji_id) для иконки кнопки товара.
+    icon_emoji_id: Mapped[Optional[str]] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     variants: Mapped[List["Variant"]] = relationship(
@@ -124,6 +126,8 @@ class Variant(Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Кастом-эмодзи (custom_emoji_id) для иконки кнопки номинала.
+    icon_emoji_id: Mapped[Optional[str]] = mapped_column(String(32))
 
     product: Mapped["Product"] = relationship(back_populates="variants")
     stock_items: Mapped[List["StockItem"]] = relationship(
