@@ -17,8 +17,18 @@ server {
     listen [::]:80;
     server_name shop.vallshop.com;
 
-    # Проксируем только вебхук и healthcheck на контейнер бота (localhost:8080).
-    location = /bolt/webhook {
+    # Проксируем вебхук(и) и healthcheck на контейнер бота (localhost:8080).
+    # Префикс /bolt/ покрывает и /bolt/webhook, и /bolt/callback.
+    location /bolt/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Запасной путь, если в кабинете указан просто /callback.
+    location = /callback {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

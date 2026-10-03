@@ -48,7 +48,10 @@ def build_app(
         return web.json_response({"status": "SUCCESS"})
 
     app.router.add_get("/healthz", healthz)
-    app.router.add_post("/bolt/webhook", bolt_webhook)
+    # Принимаем вебхук на нескольких путях — на случай, если в кабинете
+    # BoltUtil указан другой (например /bolt/callback).
+    for path in ("/bolt/webhook", "/bolt/callback", "/callback"):
+        app.router.add_post(path, bolt_webhook)
     return app
 
 
