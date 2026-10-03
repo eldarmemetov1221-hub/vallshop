@@ -80,7 +80,9 @@ HELP = (
     "/addstock variant_id — затем отправьте коды (по одному в строке)\n"
     "/stock — остатки по номиналам\n\n"
     "<b>Заказы</b>\n"
-    "/orders — последние заказы"
+    "/orders — последние заказы\n\n"
+    "<b>Прочее</b>\n"
+    "/emojiid — узнать id кастом-эмодзи (нужен Telegram Premium)"
 )
 
 
@@ -315,6 +317,29 @@ async def cmd_addstock(message: Message, db: Database, state: FSMContext) -> Non
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Отменено.")
+
+
+@router.message(Command("emojiid"))
+async def cmd_emojiid(message: Message) -> None:
+    """Показать custom_emoji_id кастом-эмодзи в сообщении.
+
+    Отправьте боту (ответом или в одном сообщении после /emojiid) текст с
+    премиум-эмодзи — бот вернёт их id. Слать кастом-эмодзи может только
+    аккаунт с Telegram Premium.
+    """
+    target = message.reply_to_message or message
+    entities = (target.entities or []) + (target.caption_entities or [])
+    ids = [e.custom_emoji_id for e in entities if getattr(e, "custom_emoji_id", None)]
+    if not ids:
+        await message.answer(
+            "Не нашёл кастом-эмодзи. Отправьте /emojiid и в этом же сообщении "
+            "(или ответом на сообщение) поставьте премиум-эмодзи.\n"
+            "Слать кастом-эмодзи может только аккаунт с Telegram Premium."
+        )
+        return
+    lines = ["Найденные custom_emoji_id:"]
+    lines += [f"<code>{i}</code>" for i in ids]
+    await message.answer("\n".join(lines))
 
 
 @router.message(AddStock.waiting_codes)
