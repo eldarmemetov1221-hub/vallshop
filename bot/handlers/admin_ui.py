@@ -691,8 +691,8 @@ async def msg_fzr_price(message: Message, db: Database, state: FSMContext) -> No
     note = ""
     if kind == "topup":
         note = (
-            "\n⚠️ Топапы требуют данные игрока — клиентская самовыдача пока "
-            "отключена (продаются через поддержку)."
+            "\nℹ️ Топап: при покупке бот сам спросит у клиента данные игрока "
+            "(напр. ID), затем оформит заказ и зачислит на аккаунт."
         )
     await message.answer(
         f"✅ Номинал FazerCard создан: <b>{title}</b>" + note,

@@ -5,11 +5,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    Message,
+    ReplyKeyboardRemove,
+)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from ..config import BotConfig
 from ..db import Database
@@ -30,6 +39,12 @@ router = Router()
 MAX_QTY_CAP = 50  # верхний предел количества за одну покупку
 
 
+class BuyFlow(StatesGroup):
+    """Покупка топапа FazerCard: пошаговый сбор данных игрока."""
+    collecting = State()
+    confirming = State()
+
+
 async def _clear_reply_keyboard(message: Message) -> None:
     """Убрать старую нижнюю reply-клавиатуру (всё меню теперь inline)."""
     try:
@@ -40,7 +55,10 @@ async def _clear_reply_keyboard(message: Message) -> None:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, db: Database, config: BotConfig) -> None:
+async def cmd_start(
+    message: Message, db: Database, config: BotConfig, state: FSMContext
+) -> None:
+    await state.clear()
     async with db.session() as session:
         await order_service.ensure_user(
             session,
@@ -81,7 +99,8 @@ async def cb_noop(call: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "catalog")
-async def cb_catalog(call: CallbackQuery, db: Database) -> None:
+async def cb_catalog(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    await state.clear()
     async with db.session() as session:
         products = await catalog_service.list_products(session)
     caption = texts.CHOOSE_PRODUCT if products else texts.CATALOG_EMPTY
@@ -130,8 +149,10 @@ async def cb_product(
 
 @router.callback_query(F.data.startswith("var:"))
 async def cb_variant(
-    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient,
+    state: FSMContext,
 ) -> None:
+    await state.clear()  # сбросить незавершённый сбор данных топапа (в т.ч. отмену)
     variant_id = int(call.data.split(":", 1)[1])
     async with db.session() as session:
         variant = await catalog_service.get_variant(session, variant_id)
@@ -221,9 +242,19 @@ async def _render_quantity(
 
 @router.callback_query(F.data.startswith("buy:"))
 async def cb_buy(
-    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient,
+    state: FSMContext,
 ) -> None:
     variant_id = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        variant = await catalog_service.get_variant(session, variant_id)
+        is_topup = bool(
+            variant and variant.is_active
+            and variant.source == "fazercard" and variant.fzr_kind == "topup"
+        )
+    if is_topup:
+        await _start_topup(call, config, fzr, state, variant)
+        return
     await _render_quantity(call, db, config, fzr, variant_id, 1)
 
 
@@ -233,6 +264,180 @@ async def cb_qty(
 ) -> None:
     _, vid, n = call.data.split(":", 2)
     await _render_quantity(call, db, config, fzr, int(vid), int(n))
+
+
+# ── Покупка топапа: сбор данных игрока (fields) ──────────────────────────────
+async def _start_topup(call, config, fzr, state, variant) -> None:
+    price = sale_price(variant, config.default_markup_percent)
+    try:
+        meta = await asyncio.to_thread(fzr.topup_meta, variant.fzr_a)
+    except Exception:  # noqa: BLE001
+        await call.answer("Поставщик недоступен, попробуйте позже", show_alert=True)
+        return
+    fields = meta.get("fields") or []
+    await state.set_state(BuyFlow.collecting)
+    await state.update_data(
+        vid=variant.id, fields=fields, idx=0, answers={},
+        price_str=texts.money(price, config.currency), title=variant.title,
+    )
+    intro = f"🧩 <b>{variant.title}</b>\nЦена: <b>{texts.money(price, config.currency)}</b>"
+    if meta.get("note"):
+        intro += f"\n\nℹ️ {meta['note']}"
+    await call.message.answer(intro)
+    await _ask_next(call.message, state)
+    await call.answer()
+
+
+def _field_cancel_kb(vid: int) -> InlineKeyboardBuilder:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"var:{vid}"))
+    return b
+
+
+async def _ask_next(target: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    fields, idx = data["fields"], data["idx"]
+    if idx >= len(fields):
+        await _show_topup_confirm(target, state)
+        return
+    f = fields[idx]
+    label = f.get("label") or f.get("key")
+    ftype = (f.get("type") or "text").lower()
+    opts = f.get("options") or []
+    await state.set_state(BuyFlow.collecting)
+    if ftype == "select" and opts:
+        b = InlineKeyboardBuilder()
+        for i, o in enumerate(opts):
+            b.row(InlineKeyboardButton(text=str(o), callback_data=f"fsel:{i}"))
+        b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"var:{data['vid']}"))
+        await target.answer(f"Выберите «{label}»:", reply_markup=b.as_markup())
+    else:
+        await target.answer(
+            f"Введите «{label}»:", reply_markup=_field_cancel_kb(data["vid"]).as_markup()
+        )
+
+
+async def _show_topup_confirm(target: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    lines = [f"🧾 <b>{data['title']}</b>", f"Цена: <b>{data['price_str']}</b>", "", "Данные:"]
+    for f in data["fields"]:
+        val = data["answers"].get(f["key"], "")
+        lines.append(f"• {f.get('label') or f.get('key')}: <code>{val}</code>")
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text=f"✅ Купить за {data['price_str']}", callback_data="tbuy"))
+    b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"var:{data['vid']}"))
+    await state.set_state(BuyFlow.confirming)
+    await target.answer("\n".join(lines), reply_markup=b.as_markup())
+
+
+@router.message(BuyFlow.collecting)
+async def msg_collect_field(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    fields, idx = data["fields"], data["idx"]
+    if idx >= len(fields):
+        await _show_topup_confirm(message, state)
+        return
+    f = fields[idx]
+    if (f.get("type") or "text").lower() == "select" and (f.get("options") or []):
+        await message.answer("Пожалуйста, выберите вариант кнопкой выше.")
+        return
+    val = (message.text or "").strip()
+    if not val:
+        await message.answer("Пустое значение. Введите ещё раз.")
+        return
+    answers = dict(data["answers"])
+    answers[f["key"]] = val
+    await state.update_data(answers=answers, idx=idx + 1)
+    await _ask_next(message, state)
+
+
+@router.callback_query(BuyFlow.collecting, F.data.startswith("fsel:"))
+async def cb_select_field(call: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    fields, idx = data["fields"], data["idx"]
+    if idx >= len(fields):
+        await call.answer()
+        return
+    opts = fields[idx].get("options") or []
+    i = int(call.data.split(":", 1)[1])
+    if i >= len(opts):
+        await call.answer("Список устарел", show_alert=True)
+        return
+    answers = dict(data["answers"])
+    answers[fields[idx]["key"]] = str(opts[i])
+    await state.update_data(answers=answers, idx=idx + 1)
+    await call.answer()
+    await _ask_next(call.message, state)
+
+
+@router.callback_query(BuyFlow.confirming, F.data == "tbuy")
+async def cb_topup_confirm(
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    vid, answers = data["vid"], data["answers"]
+    async with db.session() as session:
+        variant = await catalog_service.get_variant(session, vid)
+        if not variant or not variant.is_active:
+            await state.clear()
+            await call.answer("Недоступно", show_alert=True)
+            return
+        unit_price = sale_price(variant, config.default_markup_percent)
+        await order_service.ensure_user(
+            session, call.from_user.id, call.from_user.username, call.from_user.full_name
+        )
+        try:
+            order, codes = await order_service.purchase_from_balance(
+                session, user_id=call.from_user.id, variant=variant,
+                unit_price=unit_price, quantity=1, fzr=fzr, topup_fields=answers,
+            )
+        except InsufficientBalance:
+            await session.rollback()
+            bal = await get_balance(session, call.from_user.id)
+            await call.answer(
+                texts.NOT_ENOUGH_BALANCE.format(
+                    total=texts.money(unit_price, config.currency),
+                    balance=texts.money(bal, config.currency),
+                ),
+                show_alert=True,
+            )
+            return
+        except SupplierError:
+            await session.rollback()
+            await call.answer(
+                "😔 Поставщик временно недоступен, деньги не списаны.", show_alert=True
+            )
+            return
+        status = order.status
+        await session.commit()
+        total = unit_price
+        balance = await get_balance(session, call.from_user.id)
+        item_name = variant.title
+
+    await state.clear()
+    bal_str = texts.money(balance, config.currency)
+    total_str = texts.money(total, config.currency)
+    if status == OrderStatus.COMPLETED and codes:
+        codes_text = "\n".join(f"<code>{c}</code>" for c in codes)
+        await call.message.answer(
+            texts.PURCHASE_SUCCESS.format(
+                item=item_name, qty=1, total=total_str, balance=bal_str, codes=codes_text
+            ),
+            reply_markup=kb.after_purchase_kb(),
+        )
+    elif status == OrderStatus.COMPLETED:
+        await call.message.answer(
+            texts.TOPUP_ACCOUNT_DELIVERED, reply_markup=kb.after_purchase_kb()
+        )
+    else:  # FULFILLING
+        await call.message.answer(
+            texts.PURCHASE_PENDING.format(
+                item=item_name, qty=1, total=total_str, balance=bal_str
+            ),
+            reply_markup=kb.after_purchase_kb(),
+        )
+    await call.answer("Готово ✅")
 
 
 @router.callback_query(F.data.startswith("confirm:"))
@@ -246,13 +451,6 @@ async def cb_confirm(
         variant = await catalog_service.get_variant(session, variant_id)
         if not variant or not variant.is_active:
             await call.answer("Недоступно", show_alert=True)
-            return
-        # Топапы FazerCard требуют данные игрока — пока только через админа.
-        if variant.source == "fazercard" and variant.fzr_kind == "topup":
-            await call.answer(
-                "Этот товар оформляется через поддержку — напишите админу.",
-                show_alert=True,
-            )
             return
         unit_price = sale_price(variant, config.default_markup_percent)
         await order_service.ensure_user(

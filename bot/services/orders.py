@@ -185,16 +185,21 @@ async def _fulfill_fazercard(
         order.supplier_order_id = str(oid)
 
     codes = FazerCardClient.extract_codes(data)
-    if codes and FazerCardClient.status_is_terminal_ok(data):
-        order.delivery_code = "\n".join(codes)
-        order.status = OrderStatus.COMPLETED
+    if FazerCardClient.status_is_terminal_ok(data):
+        if codes:
+            order.delivery_code = "\n".join(codes)
+            order.status = OrderStatus.COMPLETED
+        elif variant.fzr_kind == "topup":
+            # Топап зачисляется прямо на игровой аккаунт — кода нет.
+            order.status = OrderStatus.COMPLETED
+        # иначе (ключ/карта без кода) — остаёмся FULFILLING, коды дотянет поллер
         await session.flush()
         return order, codes
 
     if FazerCardClient.status_is_terminal_failed(data):
         raise SupplierError("FazerCard отклонил заказ")
 
-    # Обрабатывается — оставляем FULFILLING, коды дотянет поллер.
+    # Обрабатывается — оставляем FULFILLING, выдачу дотянет поллер.
     await session.flush()
     return order, []
 
@@ -216,7 +221,11 @@ async def poll_fazercard(
             order.delivery_code = "\n".join(codes)
             order.status = OrderStatus.COMPLETED
         else:
-            order.status = OrderStatus.FAILED
+            variant = await session.get(Variant, order.variant_id)
+            if variant and variant.fzr_kind == "topup":
+                order.status = OrderStatus.COMPLETED  # зачислено на аккаунт
+            else:
+                order.status = OrderStatus.FAILED  # ключ/карта без кода — ошибка
     elif FazerCardClient.status_is_terminal_failed(data):
         order.status = OrderStatus.FAILED
     # иначе остаётся FULFILLING

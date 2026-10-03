@@ -184,9 +184,23 @@ class FazerCardClient:
         return self._request("GET", "/api/v2/gamekeys/keys", params=p)
 
     def list_topup_offers(self, *, category_id: str, include_ui: bool = False):
-        """GET /topups/offers?category_id= -> {ok, offers:[{offer_id,name,price_usd,fields:[...]}]}"""
+        """GET /topups/offers?category_id= -> {ok, offers:[...], fields:[...], note}
+
+        Поля игрока (``fields``) задаются на уровне КАТЕГОРИИ, а не оффера:
+        каждый — ``{key, label, type: "text"|"select", options?: [...]}``.
+        """
         p = {"category_id": category_id, "include_ui": 1 if include_ui else 0}
         return self._request("GET", "/api/v2/topups/offers", params=p)
+
+    def topup_meta(self, category_id: str) -> Dict[str, Any]:
+        """Вернуть {fields:[...], note:str} для категории топапов."""
+        data = self.list_topup_offers(category_id=category_id)
+        fields = data.get("fields") if isinstance(data, dict) else None
+        note = data.get("note") if isinstance(data, dict) else None
+        return {
+            "fields": fields if isinstance(fields, list) else [],
+            "note": note or "",
+        }
 
     # ── Агрегаторы каталога (для админ-браузера) ───────────────────────────────
     def all_categories(self, kind: str, *, cap: int = 2000) -> List[Dict[str, Any]]:
@@ -337,10 +351,18 @@ class FazerCardClient:
                 {"key_id": "k1", "name": "Standard Edition", "price_usd": "4.00", "stock": 3},
             ]}
         if path.endswith("/topups/offers"):
-            return {"ok": True, "offers": [
-                {"offer_id": "o1", "name": "60 UC", "price_usd": "1.00",
-                 "fields": [{"key": "player_id", "label": "Player ID", "type": "text"}]},
-            ]}
+            return {
+                "ok": True,
+                "offers": [
+                    {"offer_id": "o1", "name": "60 UC", "price_usd": "1.00"},
+                ],
+                "fields": [
+                    {"key": "player_id", "label": "Player ID", "type": "text"},
+                    {"key": "server", "label": "Server", "type": "select",
+                     "options": ["Asia", "Europe"]},
+                ],
+                "note": "Mock topup.",
+            }
         if path.endswith(("/giftcards", "/gamekeys", "/topups")):
             return {"ok": True, "items": [
                 {"id": "amazon_us", "name": "Amazon (US)"},

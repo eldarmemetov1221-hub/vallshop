@@ -84,6 +84,9 @@ async def _tick(
 
         if status == OrderStatus.COMPLETED and code:
             await _notify(bot, user_id, texts.DELIVERY_SUCCESS.format(code=code))
+        elif status == OrderStatus.COMPLETED:
+            # Топап без кода — зачислено на игровой аккаунт.
+            await _notify(bot, user_id, texts.TOPUP_ACCOUNT_DELIVERED)
         elif status == OrderStatus.REFUNDED and refunded:
             await _notify(
                 bot, user_id,

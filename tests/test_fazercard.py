@@ -83,7 +83,11 @@ def test_offers_for_normalizes_giftcard_and_gamekey():
     gk = c.offers_for("gamekey", "steam")
     assert gk[0]["id"] == "k1" and gk[0]["name"] == "Standard Edition"
     tu = c.offers_for("topup", "pubg")
-    assert tu[0]["id"] == "o1" and tu[0]["fields"]
+    assert tu[0]["id"] == "o1"
+    # Поля игрока — на уровне категории (topup_meta), а не оффера.
+    meta = c.topup_meta("pubg")
+    assert meta["fields"][0]["key"] == "player_id"
+    assert meta["fields"][1]["type"] == "select"
 
 
 def test_all_categories_follows_items():

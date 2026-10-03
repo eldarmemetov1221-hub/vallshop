@@ -167,6 +167,34 @@ class _PendingFzr:
         return {"ok": True, "order": {"id": order_id, "status": "completed", "keys": ["LATE-1"]}}
 
 
+class _TopupFzr:
+    """Топап: принимает поля игрока, завершает без кода (на аккаунт)."""
+
+    def __init__(self):
+        self.fields = None
+
+    def order_topup(self, *, category_id, offer_id, fields, idempotency_key=None):
+        self.fields = fields
+        return {"ok": True, "order": {"id": "t1", "status": "completed"}}
+
+
+@pytest.mark.asyncio
+async def test_fazercard_topup_completes_without_code(db):
+    vid = await _setup_fzr(db, balance="10", kind="topup")
+    fzr = _TopupFzr()
+    async with db.session() as s:
+        v = await s.get(Variant, vid)
+        order, codes = await order_service.purchase_from_balance(
+            s, user_id=7, variant=v, unit_price=Decimal("3"), quantity=1,
+            fzr=fzr, topup_fields={"user_id": "12345"},
+        )
+        await s.commit()
+        assert fzr.fields == {"user_id": "12345"}
+        assert order.status == OrderStatus.COMPLETED
+        assert codes == []  # доставлено на аккаунт, кода нет
+        assert await balance_service.get_balance(s, 7) == Decimal("7.00")
+
+
 @pytest.mark.asyncio
 async def test_fazercard_pending_then_poller_completes(db):
     vid = await _setup_fzr(db, balance="10")
