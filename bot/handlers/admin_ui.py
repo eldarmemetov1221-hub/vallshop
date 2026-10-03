@@ -75,6 +75,15 @@ def _first_custom_emoji(message: Message) -> Optional[str]:
     return None
 
 
+def _emoji_id_from(message: Message) -> Optional[str]:
+    """custom_emoji_id из присланного премиум-эмодзи ИЛИ из набранного числа-ID."""
+    cid = _first_custom_emoji(message)
+    if cid:
+        return cid
+    raw = (message.text or "").strip()
+    return raw if raw.isdigit() and 5 <= len(raw) <= 25 else None
+
+
 def _btn(text: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=data)
 
@@ -803,8 +812,9 @@ async def msg_add_stock(message: Message, db: Database, state: FSMContext) -> No
 
 # ── Эмодзи товара/номинала ───────────────────────────────────────────────────
 _EMOJI_HINT = (
-    "🙂 Пришлите <b>одно премиум-эмодзи</b> (нужен Telegram Premium), "
-    "чтобы поставить его иконкой кнопки, или <code>-</code> чтобы убрать.\n"
+    "🙂 Пришлите <b>одно премиум-эмодзи</b> (нужен Telegram Premium) "
+    "или его <b>ID</b> числом (например <code>5406705291213417505</code>), "
+    "чтобы поставить иконкой кнопки, или <code>-</code> чтобы убрать.\n"
     "Обычные (не премиум) эмодзи иконкой кнопки Telegram не принимает."
 )
 
@@ -823,9 +833,9 @@ async def msg_prod_emoji(message: Message, db: Database, state: FSMContext) -> N
     data = await state.get_data()
     pid = data.get("pid")
     raw = (message.text or "").strip()
-    emoji_id = None if raw == "-" else _first_custom_emoji(message)
+    emoji_id = None if raw == "-" else _emoji_id_from(message)
     if raw != "-" and emoji_id is None:
-        await message.answer("Не нашёл премиум-эмодзи. Пришлите именно премиум-эмодзи или - ")
+        await message.answer("Не нашёл эмодзи. Пришлите премиум-эмодзи, его ID числом или - ")
         return
     async with db.session() as session:
         p = await session.get(Product, pid)
@@ -852,9 +862,9 @@ async def msg_var_emoji(message: Message, db: Database, state: FSMContext) -> No
     data = await state.get_data()
     vid = data.get("vid")
     raw = (message.text or "").strip()
-    emoji_id = None if raw == "-" else _first_custom_emoji(message)
+    emoji_id = None if raw == "-" else _emoji_id_from(message)
     if raw != "-" and emoji_id is None:
-        await message.answer("Не нашёл премиум-эмодзи. Пришлите именно премиум-эмодзи или - ")
+        await message.answer("Не нашёл эмодзи. Пришлите премиум-эмодзи, его ID числом или - ")
         return
     async with db.session() as session:
         v = await session.get(Variant, vid)

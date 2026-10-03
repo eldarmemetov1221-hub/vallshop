@@ -120,7 +120,10 @@ async def cb_product(
         call,
         banner="catalog",
         caption=caption,
-        reply_markup=kb.variants_kb(variants, prices, stock, config.currency),
+        reply_markup=kb.variants_kb(
+            variants, prices, stock, config.currency,
+            product_icon=product.icon_emoji_id,
+        ),
     )
     await call.answer()
 

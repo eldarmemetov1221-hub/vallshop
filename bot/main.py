@@ -18,7 +18,7 @@ from .config import BotConfig
 from .db import Database
 from .handlers import build_root_router
 from .payments import build_provider
-from .services.poller import run_fulfillment_poller
+from .services.poller import run_fulfillment_poller, run_topup_poller
 
 log = logging.getLogger("vallshop")
 
@@ -67,7 +67,10 @@ async def main() -> None:
 
     dp.include_router(build_root_router())
 
-    tasks = [asyncio.create_task(run_fulfillment_poller(bot, db, liog, fzr))]
+    tasks = [
+        asyncio.create_task(run_fulfillment_poller(bot, db, liog, fzr)),
+        asyncio.create_task(run_topup_poller(bot, db, provider)),
+    ]
     if config.public_base_url:
         await _run_web(config, bot, db, provider, liog)
 
