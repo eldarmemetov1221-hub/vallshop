@@ -56,6 +56,7 @@ class Database:
             ("orders", "supplier", "VARCHAR(16)"),
             ("orders", "supplier_order_id", "VARCHAR(64)"),
             ("products", "parent_id", "INTEGER"),
+            ("variants", "price_rub", "NUMERIC(12,2)"),
         ]
         added_source = False
         for table, column, ddl in wanted:

@@ -40,6 +40,29 @@ def sale_price(variant: Variant, default_markup_percent: Decimal = Decimal("0"))
     return quantize_money(cost * (Decimal(1) + markup / Decimal(100)))
 
 
+def _fmt_rub(value: Decimal) -> str:
+    d = Decimal(value)
+    if d == d.to_integral_value():
+        return f"{int(d)}"
+    return f"{d:.2f}"
+
+
+def price_label(variant: Variant, default_markup_percent: Decimal = Decimal("0")) -> str:
+    """Короткая цена для кнопки/карточки: «₽ / $», только заданные валюты.
+
+    USD (списание) берётся из sale_price; ₽ — из ручного price_rub (справочно).
+    Если ни одна цена не задана — «—».
+    """
+    parts: list[str] = []
+    rub = getattr(variant, "price_rub", None)
+    if rub is not None:
+        parts.append(f"{_fmt_rub(rub)} ₽")
+    usd = sale_price(variant, default_markup_percent)
+    if usd and usd > 0:
+        parts.append(f"{usd:.2f} $")
+    return " / ".join(parts) if parts else "—"
+
+
 def margin(variant: Variant, default_markup_percent: Decimal = Decimal("0")) -> Decimal:
     """Абсолютная маржа (цена продажи минус закупка)."""
     return quantize_money(

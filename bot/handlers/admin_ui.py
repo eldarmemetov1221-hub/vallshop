@@ -29,7 +29,7 @@ from ..db import Database
 from ..db.models import Order, Product, StockItem, StockStatus, Variant
 from ..services import catalog as catalog_service
 from ..services import stock as stock_service
-from ..services.pricing import margin, sale_price
+from ..services.pricing import _fmt_rub, margin, price_label, sale_price
 from fazercard import FazerCardClient, FazerCardError
 from .. import texts
 
@@ -62,6 +62,8 @@ class AdminUI(StatesGroup):
     set_prod_desc = State()
     add_variant_manual = State()
     add_subcat = State()
+    set_var_title = State()
+    set_price_rub = State()
     fzr_search = State()
     fzr_price = State()
 
@@ -187,10 +189,9 @@ async def _product_card(session, config: BotConfig, product_id: int):
         kb.row(_btn(f"{cflag} 📁 {c.title}", f"a_prod:{c.id}"))
     for v in variants:
         vflag = "🟢" if v.is_active else "🔴"
-        price = sale_price(v, config.default_markup_percent)
         kb.row(
             _btn(
-                f"{vflag} {v.title} · {texts.money(price, config.currency)} · сток {counts.get(v.id, 0)}",
+                f"{vflag} {v.title} · {price_label(v, config.default_markup_percent)} · сток {counts.get(v.id, 0)}",
                 f"a_var:{v.id}",
             )
         )
@@ -256,10 +257,15 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
         else (f"наценка {v.markup_percent}%" if v.markup_percent is not None
               else f"наценка по умолчанию {config.default_markup_percent}%")
     )
+    rub_line = (
+        f"Цена ₽: <b>{_fmt_rub(Decimal(v.price_rub))} ₽</b>\n"
+        if v.price_rub is not None else "Цена ₽: — (не задана)\n"
+    )
     caption = (
         f"🧩 <b>{v.title}</b> ({vflag})\n"
         f"Закуп: {texts.money(Decimal(v.cost_usd or 0), config.currency)}\n"
         f"Цена продажи: <b>{texts.money(price, config.currency)}</b> ({price_src})\n"
+        + rub_line +
         f"Маржа: {texts.money(m, config.currency)}\n"
         f"Сток: <b>{in_stock}</b>\n"
         + (
@@ -272,11 +278,15 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
         )
     )
     kb = InlineKeyboardBuilder()
+    kb.row(_btn("✏️ Название номинала", f"a_vtitle:{variant_id}"))
     kb.row(
-        _btn("💲 Цена", f"a_setprice:{variant_id}"),
-        _btn("📈 Наценка", f"a_setmarkup:{variant_id}"),
+        _btn("💲 Цена $", f"a_setprice:{variant_id}"),
+        _btn("💱 Цена ₽", f"a_setrub:{variant_id}"),
     )
-    kb.row(_btn("📥 Добавить сток", f"a_astock:{variant_id}"))
+    kb.row(
+        _btn("📈 Наценка", f"a_setmarkup:{variant_id}"),
+        _btn("📥 Добавить сток", f"a_astock:{variant_id}"),
+    )
     kb.row(
         _btn("🙂 Эмодзи", f"a_vemoji:{variant_id}"),
         _btn("🔁 Вкл/выкл", f"a_tvar:{variant_id}"),
@@ -756,6 +766,78 @@ async def msg_fzr_price(message: Message, db: Database, state: FSMContext) -> No
         f"✅ Номинал FazerCard создан: <b>{title}</b>" + note,
         reply_markup=kb.as_markup(),
     )
+
+
+@router.callback_query(F.data.startswith("a_vtitle:"))
+async def cb_var_title(call: CallbackQuery, state: FSMContext) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.set_var_title)
+    await state.update_data(vid=vid)
+    await call.message.edit_text(
+        "✏️ Пришлите новое <b>название номинала</b> (покороче, чтобы на телефоне "
+        "было видно цену).",
+        reply_markup=_cancel_kb(f"a_var:{vid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_var_title)
+async def msg_var_title(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    vid = data.get("vid")
+    title = (message.text or "").strip()
+    if not title:
+        await message.answer("Название пустое. Пришлите текст.")
+        return
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if v:
+            v.title = title[:255]
+            await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
+    await message.answer("✅ Название номинала обновлено", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_setrub:"))
+async def cb_set_rub(call: CallbackQuery, state: FSMContext) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.set_price_rub)
+    await state.update_data(vid=vid)
+    await call.message.edit_text(
+        "💱 Пришлите цену в рублях (например <code>199</code> или <code>199.90</code>) "
+        "— она показывается рядом с ценой в $.\n"
+        "<code>-</code> — убрать цену ₽ (тогда покажется только $).",
+        reply_markup=_cancel_kb(f"a_var:{vid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_price_rub)
+async def msg_set_rub(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    vid = data.get("vid")
+    raw = (message.text or "").strip().replace(",", ".")
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if not v:
+            await state.clear()
+            await message.answer("Номинал не найден")
+            return
+        if raw == "-":
+            v.price_rub = None
+        else:
+            try:
+                v.price_rub = Decimal(raw)
+            except InvalidOperation:
+                await message.answer("Число или -")
+                return
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
+    await message.answer("✅ Цена ₽ обновлена", reply_markup=kb.as_markup())
 
 
 @router.callback_query(F.data.startswith("a_setprice:"))

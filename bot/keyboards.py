@@ -112,7 +112,7 @@ def products_kb(
 
 def variants_kb(
     variants: List[Variant],
-    prices: Mapping[int, Decimal],
+    prices: Mapping[int, str],  # id -> готовая строка цены (₽ / $)
     stock: Mapping[int, int],
     currency: str = "USDT",
     product_icon: Optional[str] = None,
@@ -120,7 +120,7 @@ def variants_kb(
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for v in variants:
-        price = money(prices[v.id], currency)
+        price = prices[v.id]  # уже отформатированная строка (₽ / $)
         if getattr(v, "source", "stock") == "fazercard":
             st = stock.get(v.id)
             if st is None:

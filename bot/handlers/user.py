@@ -27,7 +27,7 @@ from ..services import orders as order_service
 from ..services import stock as stock_service
 from ..services.balance import get_balance
 from ..services.orders import InsufficientBalance, OutOfStock, SupplierError
-from ..services.pricing import sale_price
+from ..services.pricing import price_label, sale_price
 from ..db.models import OrderStatus
 from fazercard import FazerCardClient
 from ..ui import render
@@ -151,7 +151,7 @@ async def cb_product(
             return
 
         variants = await catalog_service.list_variants(session, product_id)
-        prices = {v.id: sale_price(v, config.default_markup_percent) for v in variants}
+        prices = {v.id: price_label(v, config.default_markup_percent) for v in variants}
         stock = await stock_service.counts_by_variant(session, [v.id for v in variants])
 
     if not variants:
@@ -211,7 +211,7 @@ async def cb_variant(
         note = texts.OUT_OF_STOCK_NOTE
     caption = (
         f"<b>{variant.title}</b>\n"
-        f"Цена: <b>{texts.money(price, config.currency)}</b>\n"
+        f"Цена: <b>{price_label(variant, config.default_markup_percent)}</b>\n"
         f"Статус: {note}"
     )
     await render(call, banner="catalog", caption=caption, reply_markup=kb.buy_kb(variant_id, back=back))
