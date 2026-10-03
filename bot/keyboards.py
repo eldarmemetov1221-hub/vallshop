@@ -48,7 +48,10 @@ EMOJI = {
     "offer": "6030445631921721471",      # публичная оферта
     "agreement": "6030445631921721471",  # пользовательское соглашение
     "privacy": "5935757052042285202",    # политика конфиденциальности
+    "support": "6021618194228187816",    # техподдержка
 }
+
+SUPPORT_URL = "https://t.me/vallmanager"
 
 
 def _b(
@@ -81,6 +84,8 @@ def faq_kb(
     privacy_url: Optional[str] = None,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    # Техподдержка — над политиками.
+    kb.row(_b("Техподдержка", url=SUPPORT_URL, style="primary", icon=EMOJI["support"]))
     # Политика конфиденциальности + Политика соглашения — в один ряд.
     if privacy_url and agreement_url:
         kb.row(
