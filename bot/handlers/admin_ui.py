@@ -115,6 +115,7 @@ def _panel_kb() -> InlineKeyboardMarkup:
     kb.row(_btn("📦 Товары", "a_prods"))
     kb.row(_btn("➕ Добавить товар", "a_addprod"))
     kb.row(_btn("🧾 Заказы", "a_orders"), _btn("📥 Сток", "a_stock"))
+    kb.row(_btn("🎟 Коды активации", "ac_home"))
     kb.row(_btn("⬅️ Меню", "menu"))
     return kb.as_markup()
 

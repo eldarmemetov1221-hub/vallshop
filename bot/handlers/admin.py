@@ -27,22 +27,12 @@ from ..db.models import (
     StockStatus,
     Variant,
 )
-from ..services import activation as act_service
 from ..services import catalog as catalog_service
 from ..services import stock as stock_service
 from ..services.pricing import margin, sale_price
-from roblox import parse_robux_amount
 from .. import texts
 
-import random
-import string
-
 router = Router()
-
-
-def _gen_code() -> str:
-    raw = "".join(random.choices(string.digits, k=9))
-    return f"{raw[:3]}-{raw[3:6]}-{raw[6:]}"
 
 
 class IsAdmin(BaseFilter):
@@ -414,88 +404,3 @@ async def cmd_orders(message: Message, db: Database, config: BotConfig) -> None:
         )
     await message.answer("\n".join(lines))
 
-
-# ── Коды активации ────────────────────────────────────────────────────────────
-@router.message(Command("codes"))
-async def cmd_codes(message: Message, db: Database) -> None:
-    async with db.session() as session:
-        c = await act_service.code_counts(session)
-    await message.answer(
-        "🎟 <b>Коды активации</b>\n"
-        f"Всего: <b>{c['total']}</b>\n"
-        f"Свободных: <b>{c['free']}</b>\n"
-        f"Использованных: <b>{c['used']}</b>\n\n"
-        "Добавить: <code>/addcode КОД | Товар | инструкция</code>\n"
-        "Сгенерировать: <code>/newcode Товар | инструкция</code>\n"
-        "Пачкой: <code>/addbulk Товар | инструкция | КОЛИЧЕСТВО</code>"
-    )
-
-
-@router.message(Command("addcode"))
-async def cmd_addcode(message: Message, db: Database) -> None:
-    raw = (message.text or "").split(" ", 1)
-    body = raw[1] if len(raw) > 1 else ""
-    parts = [p.strip() for p in body.split("|")]
-    if len(parts) < 2:
-        await message.answer("Формат: /addcode КОД | Товар | инструкция")
-        return
-    code, product = parts[0], parts[1]
-    instruction = parts[2] if len(parts) > 2 else None
-    async with db.session() as session:
-        ok = await act_service.add_code(
-            session, code=code, product=product, instruction=instruction,
-            robux_amount=parse_robux_amount(product),
-        )
-        await session.commit()
-    await message.answer(
-        f"✅ Код добавлен: <code>{code}</code> · {product}" if ok
-        else f"⚠️ Код <code>{code}</code> уже существует."
-    )
-
-
-@router.message(Command("newcode"))
-async def cmd_newcode(message: Message, db: Database) -> None:
-    raw = (message.text or "").split(" ", 1)
-    body = raw[1] if len(raw) > 1 else ""
-    parts = [p.strip() for p in body.split("|")]
-    if not parts or not parts[0]:
-        await message.answer("Формат: /newcode Товар | инструкция")
-        return
-    product = parts[0]
-    instruction = parts[1] if len(parts) > 1 else None
-    async with db.session() as session:
-        code = _gen_code()
-        while not await act_service.add_code(
-            session, code=code, product=product, instruction=instruction,
-            robux_amount=parse_robux_amount(product),
-        ):
-            code = _gen_code()
-        await session.commit()
-    await message.answer(f"✅ Код создан: <code>{code}</code>\n📦 {product}")
-
-
-@router.message(Command("addbulk"))
-async def cmd_addbulk(message: Message, db: Database) -> None:
-    raw = (message.text or "").split(" ", 1)
-    body = raw[1] if len(raw) > 1 else ""
-    parts = [p.strip() for p in body.split("|")]
-    if len(parts) < 3 or not parts[-1].isdigit():
-        await message.answer("Формат: /addbulk Товар | инструкция | КОЛИЧЕСТВО")
-        return
-    product = parts[0]
-    instruction = parts[1] or None
-    count = min(int(parts[-1]), 1000)
-    created = []
-    async with db.session() as session:
-        for _ in range(count):
-            code = _gen_code()
-            while not await act_service.add_code(
-                session, code=code, product=product, instruction=instruction,
-                robux_amount=parse_robux_amount(product),
-            ):
-                code = _gen_code()
-            created.append(code)
-        await session.commit()
-    preview = "\n".join(created[:20])
-    extra = f"\n… и ещё {len(created) - 20}" if len(created) > 20 else ""
-    await message.answer(f"✅ Создано {len(created)} кодов для «{product}»:\n\n{preview}{extra}")

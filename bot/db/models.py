@@ -66,6 +66,7 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String(64))
     full_name: Mapped[Optional[str]] = mapped_column(String(255))
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    block_reason: Mapped[Optional[str]] = mapped_column(String(255))
     # Баланс пользователя (USD ≈ USDT). Пополняется криптой, тратится на покупки.
     balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

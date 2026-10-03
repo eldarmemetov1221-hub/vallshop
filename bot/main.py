@@ -65,6 +65,10 @@ async def main() -> None:
     dp["liog"] = liog
     dp["fzr"] = fzr
 
+    from .middlewares import BlockedMiddleware
+    dp.message.middleware(BlockedMiddleware())
+    dp.callback_query.middleware(BlockedMiddleware())
+
     dp.include_router(build_root_router())
 
     tasks = [

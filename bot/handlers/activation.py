@@ -44,7 +44,6 @@ class ActivateFlow(StatesGroup):
     code = State()
     confirm_pass = State()
     nickname = State()
-    confirm_region = State()
 
 
 def _b(text: str, data: str) -> InlineKeyboardButton:
@@ -127,59 +126,45 @@ async def cb_passdone(call: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(ActivateFlow.nickname)
-async def msg_nick(message: Message, state: FSMContext) -> None:
+async def msg_nick(
+    message: Message, db: Database, config: BotConfig, state: FSMContext
+) -> None:
     nick = (message.text or "").strip()
     if not nick:
         await message.answer("Пришлите ник.", reply_markup=_cancel_kb())
         return
-    await state.update_data(nickname=nick)
-    await state.set_state(ActivateFlow.confirm_region)
-    b = InlineKeyboardBuilder()
-    b.row(_b("✅ Галочка убрана", "act_regiondone"))
-    b.row(_b("⬅️ Отмена", "act_cancel"))
-    await message.answer(
-        texts.ACT_REGIONAL, reply_markup=b.as_markup(), link_preview_options=_NOPREV
-    )
 
-
-@router.callback_query(ActivateFlow.confirm_region, F.data == "act_regiondone")
-async def cb_regiondone(
-    call: CallbackQuery, db: Database, config: BotConfig, state: FSMContext
-) -> None:
     data = await state.get_data()
     code = data.get("code")
     product = data.get("product")
-    nickname = data.get("nickname")
-    user_id = call.from_user.id
-    username = f"@{call.from_user.username}" if call.from_user.username else "—"
+    user_id = message.from_user.id
+    username = f"@{message.from_user.username}" if message.from_user.username else "—"
 
     async with db.session() as s:
         c = await act.find_code(s, code)
         if not c or c.status == "used":
             await state.clear()
-            await call.message.answer(texts.ACT_USED)
-            await call.answer()
+            await message.answer(texts.ACT_USED)
             return
         await act.mark_used(s, code, user_id)
         robux = roblox.parse_robux_amount(product)
         expected = roblox.expected_gamepass_price(robux)
         req = await act.create_request(
             s, code=code, product=product, user_id=user_id, username=username,
-            nickname=nickname, expected_price=expected, actual_price=None,
+            nickname=nick, expected_price=expected, actual_price=None,
         )
         await s.commit()
         rid = req.id
 
     await state.clear()
-    await call.message.answer(
-        texts.ACT_SUBMITTED.format(nickname=nickname, product=product, code=code)
+    await message.answer(
+        texts.ACT_SUBMITTED.format(nickname=nick, product=product, code=code)
     )
-    await call.answer("Отправлено на проверку ✅")
 
     # Авто-отчёт Roblox (может занять несколько секунд) → затем уведомление админам.
     try:
         report, _uid, actual = await asyncio.to_thread(
-            roblox.build_gamepass_report, nickname, expected, robux
+            roblox.build_gamepass_report, nick, expected, robux
         )
     except Exception:  # noqa: BLE001
         report, actual = "⚠️ Не удалось получить данные Roblox (проверьте вручную).", None
@@ -193,12 +178,12 @@ async def cb_regiondone(
 
     admin_text = (
         "📢 <b>Новая заявка на активацию!</b>\n\n"
-        f"👤 {call.from_user.full_name}\n"
+        f"👤 {message.from_user.full_name}\n"
         f"💬 {username}\n"
         f"🆔 ID: {user_id}\n\n"
         f"🔑 Код: <code>{code}</code>\n"
         f"📦 Товар: {product}\n"
-        f"🎮 Ник: {nickname}\n\n"
+        f"🎮 Ник: {nick}\n\n"
         f"{report}"
     )
     if len(admin_text) > 4000:
@@ -206,7 +191,7 @@ async def cb_regiondone(
 
     for admin_id in config.admin_ids:
         try:
-            await call.bot.send_message(
+            await message.bot.send_message(
                 admin_id, admin_text, reply_markup=_admin_decision_kb(rid),
                 link_preview_options=_NOPREV,
             )
