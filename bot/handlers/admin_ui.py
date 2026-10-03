@@ -7,6 +7,7 @@ admin.py тоже продолжают работать как запасной 
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -29,6 +30,7 @@ from ..db.models import Order, Product, StockItem, StockStatus, Variant
 from ..services import catalog as catalog_service
 from ..services import stock as stock_service
 from ..services.pricing import margin, sale_price
+from fazercard import FazerCardClient, FazerCardError
 from .. import texts
 
 router = Router()
@@ -59,7 +61,8 @@ class AdminUI(StatesGroup):
     set_prod_title = State()
     set_prod_desc = State()
     add_variant_manual = State()
-    add_variant_fzr = State()
+    fzr_search = State()
+    fzr_price = State()
 
 
 def _first_custom_emoji(message: Message) -> Optional[str]:
@@ -193,7 +196,10 @@ async def _product_card(session, config: BotConfig, product_id: int):
 
 
 @router.callback_query(F.data.startswith("a_prod:"))
-async def cb_product(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+async def cb_product(
+    call: CallbackQuery, db: Database, config: BotConfig, state: FSMContext
+) -> None:
+    await state.clear()  # сбросить любой незавершённый ввод (в т.ч. отмену браузера)
     pid = int(call.data.split(":", 1)[1])
     async with db.session() as session:
         caption, markup = await _product_card(session, config, pid)
@@ -492,21 +498,24 @@ async def msg_add_variant_manual(message: Message, db: Database, state: FSMConte
     )
 
 
-# ── Номинал FazerCard (buy-on-demand) ─────────────────────────────────────────
+# ── Номинал FazerCard (buy-on-demand): браузер каталога ────────────────────────
 _FZR_KINDS = {
-    "gamekey": ("ключ игры", "game_id", "key_id"),
-    "giftcard": ("подарочная карта", "category_id", "card_id"),
-    "topup": ("пополнение игры", "category_id", "offer_id"),
+    "gamekey": "ключ игры",
+    "giftcard": "подарочная карта",
+    "topup": "пополнение игры",
 }
+_FZR_RESULTS = 20   # сколько категорий показывать по поиску
+_FZR_OFFERS = 40    # сколько номиналов показывать в категории
 
 
 @router.callback_query(F.data.startswith("a_addvarf:"))
-async def cb_add_variant_fzr(call: CallbackQuery) -> None:
+async def cb_add_variant_fzr(call: CallbackQuery, state: FSMContext) -> None:
     pid = int(call.data.split(":", 1)[1])
+    await state.update_data(pid=pid)
     kb = InlineKeyboardBuilder()
-    kb.row(_btn("🔑 Ключ игры", f"a_fzrk:{pid}:gamekey"))
-    kb.row(_btn("🎁 Подарочная карта", f"a_fzrk:{pid}:giftcard"))
-    kb.row(_btn("💠 Пополнение игры", f"a_fzrk:{pid}:topup"))
+    kb.row(_btn("🔑 Ключ игры", "a_fzrk:gamekey"))
+    kb.row(_btn("🎁 Подарочная карта", "a_fzrk:giftcard"))
+    kb.row(_btn("💠 Пополнение игры", "a_fzrk:topup"))
     kb.row(_btn("⬅️ Назад", f"a_prod:{pid}"))
     await call.message.edit_text(
         "➕ <b>Номинал FazerCard</b> (под заказ)\n\nВыберите тип:",
@@ -517,61 +526,151 @@ async def cb_add_variant_fzr(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("a_fzrk:"))
 async def cb_fzr_kind(call: CallbackQuery, state: FSMContext) -> None:
-    _, pid_s, kind = call.data.split(":", 2)
-    pid = int(pid_s)
+    kind = call.data.split(":", 1)[1]
     if kind not in _FZR_KINDS:
         await call.answer("Неизвестный тип", show_alert=True)
         return
-    label, a_name, b_name = _FZR_KINDS[kind]
-    await state.set_state(AdminUI.add_variant_fzr)
-    await state.update_data(pid=pid, kind=kind)
-    note = ""
-    if kind == "topup":
-        note = (
-            "\n\n⚠️ Топапы требуют данные игрока при покупке — "
-            "самовыдача клиенту пока отключена (продаётся через поддержку)."
-        )
+    data = await state.get_data()
+    pid = data.get("pid")
+    await state.update_data(kind=kind)
+    await state.set_state(AdminUI.fzr_search)
     await call.message.edit_text(
-        f"➕ <b>FazerCard · {label}</b>\n\nПришлите: "
-        f"<code>Название | {a_name} | {b_name} | закуп_usd [| цена_usd]</code>\n"
-        f"Пример: <code>Steam 10$ | 123 | 456 | 8.50 | 10.00</code>" + note,
+        f"🔎 <b>FazerCard · {_FZR_KINDS[kind]}</b>\n\n"
+        "Пришлите название или его часть — например <code>amazon</code>, "
+        "<code>steam</code>, <code>pubg</code>.",
         reply_markup=_cancel_kb(f"a_prod:{pid}"),
     )
     await call.answer()
 
 
-@router.message(AdminUI.add_variant_fzr)
-async def msg_add_variant_fzr(message: Message, db: Database, state: FSMContext) -> None:
+@router.message(AdminUI.fzr_search)
+async def msg_fzr_search(
+    message: Message, db: Database, state: FSMContext, fzr: FazerCardClient
+) -> None:
     data = await state.get_data()
-    pid = data.get("pid")
-    kind = data.get("kind")
-    parts = [p.strip() for p in (message.text or "").split("|")]
-    if len(parts) < 4:
-        await message.answer("Формат: Название | id_a | id_b | закуп_usd [| цена_usd]")
+    pid, kind = data.get("pid"), data.get("kind")
+    query = (message.text or "").strip().lower()
+    if not query:
+        await message.answer("Пришлите слово для поиска.")
         return
-    title, fzr_a, fzr_b = parts[0], parts[1], parts[2]
     try:
-        cost = Decimal(parts[3].replace(",", "."))
-    except InvalidOperation:
-        await message.answer("закуп_usd — число (например 8.50)")
+        cats = await asyncio.to_thread(fzr.all_categories, kind)
+    except FazerCardError as e:
+        await message.answer(f"Ошибка каталога FazerCard: {e}")
         return
+    matched = [
+        c for c in cats
+        if query in str(c.get("name") or "").lower()
+        or query in str(c.get("id") or "").lower()
+    ]
+    if not matched:
+        await message.answer("Ничего не найдено. Попробуйте другое слово.")
+        return
+    matched = matched[:_FZR_RESULTS]
+    await state.update_data(cats=matched)
+    kb = InlineKeyboardBuilder()
+    for i, c in enumerate(matched):
+        kb.row(_btn(c.get("name") or str(c.get("id")), f"a_fzrc:{i}"))
+    kb.row(_btn("⬅️ Назад", f"a_prod:{pid}"))
+    more = "" if len(matched) < _FZR_RESULTS else "\n(первые 20 — уточните запрос)"
+    await message.answer(
+        f"Выберите категорию:{more}", reply_markup=kb.as_markup()
+    )
+
+
+@router.callback_query(AdminUI.fzr_search, F.data.startswith("a_fzrc:"))
+async def cb_fzr_cat(call: CallbackQuery, state: FSMContext, fzr: FazerCardClient) -> None:
+    data = await state.get_data()
+    cats = data.get("cats") or []
+    i = int(call.data.split(":", 1)[1])
+    if i >= len(cats):
+        await call.answer("Список устарел, начните заново", show_alert=True)
+        return
+    cat, kind, pid = cats[i], data.get("kind"), data.get("pid")
+    try:
+        offers = await asyncio.to_thread(fzr.offers_for, kind, cat["id"])
+    except FazerCardError as e:
+        await call.answer(f"Ошибка: {e}", show_alert=True)
+        return
+    offers = [o for o in offers if o.get("id")][:_FZR_OFFERS]
+    if not offers:
+        await call.answer("Нет доступных номиналов", show_alert=True)
+        return
+    await state.update_data(cat=cat, offers=offers)
+    kb = InlineKeyboardBuilder()
+    for j, o in enumerate(offers):
+        label = o.get("name") or str(o.get("id"))
+        extra = []
+        if o.get("price_usd"):
+            extra.append(f"${o['price_usd']}")
+        if o.get("stock") is not None:
+            extra.append(f"сток {o['stock']}")
+        if extra:
+            label += " · " + " · ".join(extra)
+        kb.row(_btn(label, f"a_fzro:{j}"))
+    kb.row(_btn("⬅️ Назад", f"a_prod:{pid}"))
+    await call.message.edit_text(
+        f"🎯 <b>{cat.get('name')}</b>\nВыберите номинал (цена — закуп у FazerCard):",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(AdminUI.fzr_search, F.data.startswith("a_fzro:"))
+async def cb_fzr_offer(call: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    offers, cat = data.get("offers") or [], data.get("cat") or {}
+    j = int(call.data.split(":", 1)[1])
+    if j >= len(offers):
+        await call.answer("Список устарел, начните заново", show_alert=True)
+        return
+    offer, pid = offers[j], data.get("pid")
+    await state.update_data(offer=offer)
+    await state.set_state(AdminUI.fzr_price)
+    price = offer.get("price_usd") or "?"
+    await call.message.edit_text(
+        f"💲 <b>{cat.get('name')} · {offer.get('name')}</b>\n"
+        f"Закуп у FazerCard: <b>${price}</b>\n\n"
+        "Пришлите вашу <b>цену продажи</b> в USDT (например <code>12.00</code>) "
+        "или <code>-</code>, чтобы продавать по закупу.",
+        reply_markup=_cancel_kb(f"a_prod:{pid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.fzr_price)
+async def msg_fzr_price(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    pid, kind = data.get("pid"), data.get("kind")
+    cat, offer = data.get("cat"), data.get("offer")
+    if not (cat and offer):
+        await state.clear()
+        await message.answer("Сессия устарела, начните заново.")
+        return
+    raw = (message.text or "").strip().replace(",", ".")
+    try:
+        cost = Decimal(str(offer.get("price_usd") or "0"))
+    except InvalidOperation:
+        cost = Decimal("0")
     price = None
-    if len(parts) > 4 and parts[4] not in ("", "-"):
+    if raw != "-":
         try:
-            price = Decimal(parts[4].replace(",", "."))
+            price = Decimal(raw)
         except InvalidOperation:
-            await message.answer("цена_usd — число или -")
+            await message.answer("Число или -")
             return
+    title = f"{cat.get('name')} · {offer.get('name')}".strip(" ·")
     async with db.session() as session:
         min_vid = await session.scalar(
             select(func.min(Variant.liog_variation_id)).where(Variant.product_id == pid)
         )
         new_vid = min(0, int(min_vid or 0)) - 1
         v = Variant(
-            product_id=pid, title=title,
+            product_id=pid, title=title[:255],
             liog_product_id=0, liog_variation_id=new_vid,
             cost_usd=cost, price_usd=price,
-            source="fazercard", fzr_kind=kind, fzr_a=fzr_a, fzr_b=fzr_b,
+            source="fazercard", fzr_kind=kind,
+            fzr_a=str(cat.get("id")), fzr_b=str(offer.get("id")),
         )
         session.add(v)
         await session.commit()
@@ -580,9 +679,14 @@ async def msg_add_variant_fzr(message: Message, db: Database, state: FSMContext)
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
     kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
+    note = ""
+    if kind == "topup":
+        note = (
+            "\n⚠️ Топапы требуют данные игрока — клиентская самовыдача пока "
+            "отключена (продаются через поддержку)."
+        )
     await message.answer(
-        f"✅ Номинал FazerCard создан: <b>{title}</b> ({kind}).\n"
-        "Выдача — под заказ, сток не нужен.",
+        f"✅ Номинал FazerCard создан: <b>{title}</b>" + note,
         reply_markup=kb.as_markup(),
     )
 

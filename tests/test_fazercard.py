@@ -74,3 +74,28 @@ def test_mock_mode_order():
     assert data["ok"] is True
     assert FazerCardClient.extract_codes(data) == ["MOCK-1", "MOCK-2", "MOCK-3"]
     assert c.balance()["currency"] == "USD"
+
+
+def test_offers_for_normalizes_giftcard_and_gamekey():
+    c = FazerCardClient(mock=True)
+    gc = c.offers_for("giftcard", "amazon_us")
+    assert gc[0]["id"] == "gc10" and gc[0]["price_usd"] == "8.50"
+    gk = c.offers_for("gamekey", "steam")
+    assert gk[0]["id"] == "k1" and gk[0]["name"] == "Standard Edition"
+    tu = c.offers_for("topup", "pubg")
+    assert tu[0]["id"] == "o1" and tu[0]["fields"]
+
+
+def test_all_categories_follows_items():
+    c = FazerCardClient(mock=True)
+    cats = c.all_categories("giftcard")
+    ids = {x["id"] for x in cats}
+    assert "amazon_us" in ids and "steam" in ids
+
+
+def test_cards_endpoint_sends_category_param():
+    sess = _Session(_Resp(200, {"ok": True, "offers": [{"card_id": "c1", "name": "n", "price_usd": "1.00"}]}))
+    c = FazerCardClient(api_key="fc_test", session=sess)
+    c.list_giftcard_cards(category_id="amazon_us")
+    assert sess.calls[0]["params"]["category_id"] == "amazon_us"
+    assert sess.calls[0]["url"].endswith("/api/v2/giftcards/cards")

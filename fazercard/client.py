@@ -173,6 +173,77 @@ class FazerCardClient:
             p["cursor"] = cursor
         return self._request("GET", "/api/v2/topups", params=p)
 
+    def list_giftcard_cards(self, *, category_id: str, include_ui: bool = False):
+        """GET /giftcards/cards?category_id= -> {ok, offers:[{card_id,name,price_usd,stock,...}]}"""
+        p = {"category_id": category_id, "include_ui": 1 if include_ui else 0}
+        return self._request("GET", "/api/v2/giftcards/cards", params=p)
+
+    def list_gamekey_keys(self, *, game_id: str, include_ui: bool = False):
+        """GET /gamekeys/keys?game_id= -> {ok, keys:[{key_id,name,price_usd,stock,...}]}"""
+        p = {"game_id": game_id, "include_ui": 1 if include_ui else 0}
+        return self._request("GET", "/api/v2/gamekeys/keys", params=p)
+
+    def list_topup_offers(self, *, category_id: str, include_ui: bool = False):
+        """GET /topups/offers?category_id= -> {ok, offers:[{offer_id,name,price_usd,fields:[...]}]}"""
+        p = {"category_id": category_id, "include_ui": 1 if include_ui else 0}
+        return self._request("GET", "/api/v2/topups/offers", params=p)
+
+    # ── Агрегаторы каталога (для админ-браузера) ───────────────────────────────
+    def all_categories(self, kind: str, *, cap: int = 2000) -> List[Dict[str, Any]]:
+        """Собрать все категории/игры раздела (следуя cursor-пагинации).
+
+        kind: "giftcard" | "gamekey" | "topup". Возвращает список
+        ``[{"id","name"}, ...]`` (id = category_id / game_id).
+        """
+        getter = {
+            "giftcard": self.list_giftcards,
+            "gamekey": self.list_gamekeys,
+            "topup": self.list_topups,
+        }[kind]
+        out: List[Dict[str, Any]] = []
+        cursor: Optional[str] = None
+        while True:
+            data = getter(limit=500, cursor=cursor)
+            items = data.get("items") if isinstance(data, dict) else None
+            for it in items or []:
+                if isinstance(it, Mapping):
+                    out.append({"id": it.get("id"), "name": it.get("name") or it.get("title") or it.get("id")})
+            meta = (data.get("meta") if isinstance(data, dict) else None) or {}
+            cursor = meta.get("next_cursor")
+            if not cursor or not meta.get("has_more") or len(out) >= cap:
+                break
+        return out
+
+    def offers_for(self, kind: str, category_id: str, *, include_ui: bool = False) -> List[Dict[str, Any]]:
+        """Получить номиналы (offers/keys) для категории/игры, нормализованно.
+
+        Возвращает ``[{"id","name","price_usd","stock","fields"}, ...]`` где id —
+        card_id / key_id / offer_id.
+        """
+        if kind == "giftcard":
+            data = self.list_giftcard_cards(category_id=category_id, include_ui=include_ui)
+            rows, id_key = data.get("offers") or [], "card_id"
+        elif kind == "gamekey":
+            data = self.list_gamekey_keys(game_id=category_id, include_ui=include_ui)
+            rows, id_key = data.get("keys") or [], "key_id"
+        elif kind == "topup":
+            data = self.list_topup_offers(category_id=category_id, include_ui=include_ui)
+            rows, id_key = data.get("offers") or [], "offer_id"
+        else:
+            return []
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            if not isinstance(r, Mapping):
+                continue
+            out.append({
+                "id": r.get(id_key) or r.get("id"),
+                "name": r.get("name") or r.get("title"),
+                "price_usd": r.get("price_usd") or r.get("price"),
+                "stock": r.get("stock"),
+                "fields": r.get("fields"),
+            })
+        return out
+
     # ── Заказы ───────────────────────────────────────────────────────────────
     def order_gamekey(self, *, game_id: str, key_id: str, quantity: int, idempotency_key: Optional[str] = None):
         body = {"game_id": game_id, "key_id": key_id, "quantity": int(quantity)}
@@ -248,6 +319,25 @@ class FazerCardClient:
     def _mock(self, method, path, params, json_body):
         if path.endswith("/balance"):
             return {"ok": True, "balance": "100.00", "currency": "USD"}
+        if path.endswith("/giftcards/cards"):
+            return {"ok": True, "offers": [
+                {"card_id": "gc10", "name": "10 USD", "price_usd": "8.50", "stock": 5},
+                {"card_id": "gc25", "name": "25 USD", "price_usd": "21.00", "stock": 2},
+            ]}
+        if path.endswith("/gamekeys/keys"):
+            return {"ok": True, "keys": [
+                {"key_id": "k1", "name": "Standard Edition", "price_usd": "4.00", "stock": 3},
+            ]}
+        if path.endswith("/topups/offers"):
+            return {"ok": True, "offers": [
+                {"offer_id": "o1", "name": "60 UC", "price_usd": "1.00",
+                 "fields": [{"key": "player_id", "label": "Player ID", "type": "text"}]},
+            ]}
+        if path.endswith(("/giftcards", "/gamekeys", "/topups")):
+            return {"ok": True, "items": [
+                {"id": "amazon_us", "name": "Amazon (US)"},
+                {"id": "steam", "name": "Steam"},
+            ], "meta": {"has_more": False, "next_cursor": None}}
         if path.endswith("/order"):
             qty = int((json_body or {}).get("quantity", 1))
             codes = [f"MOCK-{i+1}" for i in range(max(1, qty))]
