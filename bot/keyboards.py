@@ -1,9 +1,8 @@
 """Клавиатуры бота.
 
-Цвет кнопок (новое в Bot API) задаётся полем ``style``:
-  • success → 🟢 зелёный, danger → 🔴 красный, primary → 🔵 синий.
-Жёлтого/серого в API нет — для них оставляем обычный цвет + эмодзи.
-Отключить цвета можно переменной окружения BUTTON_STYLES=0.
+Цвет кнопок (Bot API ``style``): success → 🟢, danger → 🔴, primary → 🔵.
+Кастом-эмодзи (премиум) на кнопках — ``icon_custom_emoji_id`` (нужен Premium у
+владельца бота). Переключатели: BUTTON_STYLES=0 и CUSTOM_EMOJI=0.
 """
 
 from __future__ import annotations
@@ -22,21 +21,44 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from .db.models import Product, Variant
 from .texts import OUT_OF_STOCK_NOTE, money
 
-_STYLES = os.getenv("BUTTON_STYLES", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+def _truthy(v: str) -> bool:
+    return v.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _b(text: str, *, style: Optional[str] = None, **kw) -> InlineKeyboardButton:
-    """Кнопка с опциональным цветом (style игнорируется, если выключен)."""
+_STYLES = _truthy(os.getenv("BUTTON_STYLES", "1"))
+_CUSTOM_EMOJI = _truthy(os.getenv("CUSTOM_EMOJI", "1"))
+
+# Кастом-эмодзи (custom_emoji_id) для кнопок.
+EMOJI = {
+    "catalog": "5805550320985578625",
+    "profile": "6035084557378654059",
+    "balance": "5778421276024509124",
+    "orders": "5904359114531675993",
+    "topups": "6039859895291877126",
+    "topup": "5890848474563352982",
+    "back": "6039539366177541657",  # назад/отмена/меню
+}
+
+
+def _b(
+    text: str, *, style: Optional[str] = None, icon: Optional[str] = None, **kw
+) -> InlineKeyboardButton:
+    """Кнопка с опциональным цветом (style) и кастом-эмодзи (icon)."""
     if style and _STYLES:
-        return InlineKeyboardButton(text=text, style=style, **kw)
+        kw["style"] = style
+    if icon and _CUSTOM_EMOJI:
+        kw["icon_custom_emoji_id"] = icon
     return InlineKeyboardButton(text=text, **kw)
 
 
 # ── Главное меню ──────────────────────────────────────────────────────────────
 def main_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(_b("🛍 Каталог", callback_data="catalog", style="primary"))
-    kb.row(_b("🟢 Мой профиль", callback_data="profile", style="success"))
+    kb.row(
+        _b("Каталог", callback_data="catalog", style="primary", icon=EMOJI["catalog"]),
+        _b("Мой профиль", callback_data="profile", style="success", icon=EMOJI["profile"]),
+    )
     return kb.as_markup()
 
 
@@ -44,8 +66,8 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 def products_kb(products: List[Product]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for p in products:
-        kb.row(_b(p.title, callback_data=f"prod:{p.id}", style="primary"))
-    kb.row(_b("⬅️ Меню", callback_data="menu"))
+        kb.row(_b(p.title, callback_data=f"prod:{p.id}", style="primary", icon=EMOJI["catalog"]))
+    kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))
     return kb.as_markup()
 
 
@@ -61,23 +83,23 @@ def variants_kb(
         in_stock = stock.get(v.id, 0)
         note = "" if in_stock > 0 else f" · {OUT_OF_STOCK_NOTE}"
         kb.row(_b(f"{v.title} — {price}{note}", callback_data=f"var:{v.id}"))
-    kb.row(_b("⬅️ Назад", callback_data="catalog"))
+    kb.row(_b("Назад", callback_data="catalog", icon=EMOJI["back"]))
     return kb.as_markup()
 
 
 def buy_kb(variant_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(_b("💳 Купить", callback_data=f"buy:{variant_id}", style="success"))
-    kb.row(_b("⬅️ Назад", callback_data="catalog"))
+    kb.row(_b("Назад", callback_data="catalog", icon=EMOJI["back"]))
     return kb.as_markup()
 
 
 def after_purchase_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(_b("🛍 В каталог", callback_data="catalog", style="primary"))
+    kb.row(_b("Каталог", callback_data="catalog", style="primary", icon=EMOJI["catalog"]))
     kb.row(
-        _b("🟢 Профиль", callback_data="profile", style="success"),
-        _b("⬅️ Меню", callback_data="menu"),
+        _b("Профиль", callback_data="profile", style="success", icon=EMOJI["profile"]),
+        _b("Меню", callback_data="menu", icon=EMOJI["back"]),
     )
     return kb.as_markup()
 
@@ -100,7 +122,7 @@ def quantity_kb(
             style="success",
         )
     )
-    kb.row(_b("⬅️ Назад", callback_data=f"var:{variant_id}"))
+    kb.row(_b("Назад", callback_data=f"var:{variant_id}", icon=EMOJI["back"]))
     return kb.as_markup()
 
 
@@ -112,7 +134,6 @@ NETWORK_LABELS = {
     "POLYGON": "Polygon",
     "SOLANA": "Solana",
 }
-# Доступные в API цвета: TRC20 красный, остальные — обычные (жёлтого/серого нет).
 NETWORK_STYLES = {"TRC20": "danger", "SOLANA": "success"}
 
 
@@ -123,17 +144,17 @@ def network_label(net: str) -> str:
 # ── Профиль ───────────────────────────────────────────────────────────────────
 def profile_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(_b("🔴 Мой баланс", callback_data="balance", style="danger"))
-    kb.row(_b("🟡 Мои заказы", callback_data="myorders"))
-    kb.row(_b("📜 История пополнений", callback_data="mytopups"))
-    kb.row(_b("⬅️ Меню", callback_data="menu"))
+    kb.row(_b("Мой баланс", callback_data="balance", style="danger", icon=EMOJI["balance"]))
+    kb.row(_b("Мои заказы", callback_data="myorders", style="primary", icon=EMOJI["orders"]))
+    kb.row(_b("История пополнений", callback_data="mytopups", icon=EMOJI["topups"]))
+    kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))
     return kb.as_markup()
 
 
 def balance_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(_b("🟢 Пополнить баланс", callback_data="topup", style="success"))
-    kb.row(_b("⬅️ Назад", callback_data="profile"))
+    kb.row(_b("Пополнить баланс", callback_data="topup", style="success", icon=EMOJI["topup"]))
+    kb.row(_b("Назад", callback_data="profile", icon=EMOJI["back"]))
     return kb.as_markup()
 
 
@@ -147,7 +168,7 @@ def topup_networks_kb(networks: list[str]) -> InlineKeyboardMarkup:
                 style=NETWORK_STYLES.get(net.upper()),
             )
         )
-    kb.row(_b("⬅️ Отмена", callback_data="balance"))
+    kb.row(_b("Отмена", callback_data="balance", icon=EMOJI["back"]))
     return kb.as_markup()
 
 
@@ -164,17 +185,17 @@ def topup_payment_kb(
     if checkout_url:
         kb.row(_b("🌐 Страница оплаты", url=checkout_url))
     kb.row(_b("🔄 Проверить оплату", callback_data=f"tucheck:{topup_id}", style="success"))
-    kb.row(_b("⬅️ В профиль", callback_data="profile"))
+    kb.row(_b("В профиль", callback_data="profile", icon=EMOJI["back"]))
     return kb.as_markup()
 
 
 def back_profile_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(_b("⬅️ В профиль", callback_data="profile"))
+    kb.row(_b("В профиль", callback_data="profile", icon=EMOJI["back"]))
     return kb.as_markup()
 
 
 def topup_cancel_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(_b("⬅️ Отмена", callback_data="balance"))
+    kb.row(_b("Отмена", callback_data="balance", icon=EMOJI["back"]))
     return kb.as_markup()
