@@ -2,13 +2,55 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+import asyncio
+import logging
+from typing import Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..db.models import Product, Variant
+
+log = logging.getLogger("vallshop.catalog")
+
+
+def _as_int(v) -> Optional[int]:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+async def fazercard_stock(fzr, variants: List[Variant]) -> Dict[int, Optional[int]]:
+    """Живой сток FazerCard для номиналов source='fazercard'.
+
+    Возвращает ``{variant_id: stock}``; ``None`` — если сток неизвестен
+    (ошибка запроса / поле отсутствует). Группирует по категории, чтобы
+    сделать один запрос на (kind, category_id). Для не-FazerCard номиналов
+    ключей не добавляет.
+    """
+    result: Dict[int, Optional[int]] = {}
+    groups: Dict[tuple, List[Variant]] = {}
+    for v in variants:
+        if getattr(v, "source", "stock") == "fazercard" and v.fzr_a and v.fzr_b:
+            groups.setdefault((v.fzr_kind, v.fzr_a), []).append(v)
+    if not groups or fzr is None:
+        return result
+
+    for (kind, cat_id), vs in groups.items():
+        try:
+            offers = await asyncio.to_thread(fzr.offers_for, kind, cat_id)
+            smap = {str(o.get("id")): _as_int(o.get("stock")) for o in offers}
+        except Exception:  # noqa: BLE001 — витрина не должна падать из-за поставщика
+            log.warning("Не удалось получить сток FazerCard для %s/%s", kind, cat_id)
+            smap = {}
+            for v in vs:
+                result[v.id] = None
+            continue
+        for v in vs:
+            result[v.id] = smap.get(str(v.fzr_b))
+    return result
 
 
 async def list_products(

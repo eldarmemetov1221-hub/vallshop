@@ -90,7 +90,9 @@ async def cb_catalog(call: CallbackQuery, db: Database) -> None:
 
 
 @router.callback_query(F.data.startswith("prod:"))
-async def cb_product(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+async def cb_product(
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient
+) -> None:
     product_id = int(call.data.split(":", 1)[1])
     async with db.session() as session:
         product = await catalog_service.get_product(session, product_id)
@@ -104,6 +106,10 @@ async def cb_product(call: CallbackQuery, db: Database, config: BotConfig) -> No
     if not variants:
         await call.answer("Нет доступных номиналов", show_alert=True)
         return
+
+    # Живой сток FazerCard (под заказ — только у LioGames/своего стока).
+    stock = dict(stock)
+    stock.update(await catalog_service.fazercard_stock(fzr, variants))
 
     prod_emoji = texts.ce(product.icon_emoji_id or "5298953332079999355", "🎮")
     caption = f"{prod_emoji} <b>{product.title}</b>"
@@ -120,7 +126,9 @@ async def cb_product(call: CallbackQuery, db: Database, config: BotConfig) -> No
 
 
 @router.callback_query(F.data.startswith("var:"))
-async def cb_variant(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+async def cb_variant(
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient
+) -> None:
     variant_id = int(call.data.split(":", 1)[1])
     async with db.session() as session:
         variant = await catalog_service.get_variant(session, variant_id)
@@ -130,9 +138,17 @@ async def cb_variant(call: CallbackQuery, db: Database, config: BotConfig) -> No
         price = sale_price(variant, config.default_markup_percent)
         in_stock = await stock_service.available_count(session, variant_id)
         ondemand = variant.source == "fazercard"
+        if ondemand:
+            fz = await catalog_service.fazercard_stock(fzr, [variant])
+            in_stock = fz.get(variant.id)  # int (реальный сток) или None (неизвестно)
 
     if ondemand:
-        note = "под заказ (выдача за пару минут) ✅"
+        if in_stock is None:
+            note = "в наличии ✅ (выдача за пару минут)"
+        elif in_stock > 0:
+            note = f"в наличии: {in_stock} шт ✅"
+        else:
+            note = "❌ нет в наличии"
     elif in_stock > 0:
         note = f"в наличии: {in_stock} шт ✅"
     else:
@@ -147,7 +163,8 @@ async def cb_variant(call: CallbackQuery, db: Database, config: BotConfig) -> No
 
 
 async def _render_quantity(
-    call: CallbackQuery, db: Database, config: BotConfig, variant_id: int, qty: int
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient,
+    variant_id: int, qty: int,
 ) -> None:
     async with db.session() as session:
         variant = await catalog_service.get_variant(session, variant_id)
@@ -158,8 +175,18 @@ async def _render_quantity(
         in_stock = await stock_service.available_count(session, variant_id)
         balance = await get_balance(session, call.from_user.id)
         ondemand = variant.source == "fazercard"
+        live = None
+        if ondemand:
+            fz = await catalog_service.fazercard_stock(fzr, [variant])
+            live = fz.get(variant.id)  # int или None (неизвестно)
 
-    if not ondemand and in_stock <= 0:
+    if ondemand:
+        # Неизвестный сток трактуем как доступный (ограничим общим капом).
+        avail = MAX_QTY_CAP if live is None else live
+    else:
+        avail = in_stock
+
+    if avail <= 0:
         await render(
             call, banner="catalog", caption=texts.OUT_OF_STOCK_FULL,
             reply_markup=kb.buy_kb(variant_id),
@@ -167,10 +194,13 @@ async def _render_quantity(
         await call.answer()
         return
 
-    max_qty = MAX_QTY_CAP if ondemand else min(in_stock, MAX_QTY_CAP)
+    max_qty = min(avail, MAX_QTY_CAP)
     qty = max(1, min(qty, max_qty))
     total = price * qty
-    stock_label = "под заказ" if ondemand else in_stock
+    if ondemand:
+        stock_label = "—" if live is None else live
+    else:
+        stock_label = in_stock
 
     await render(
         call,
@@ -187,15 +217,19 @@ async def _render_quantity(
 
 
 @router.callback_query(F.data.startswith("buy:"))
-async def cb_buy(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+async def cb_buy(
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient
+) -> None:
     variant_id = int(call.data.split(":", 1)[1])
-    await _render_quantity(call, db, config, variant_id, 1)
+    await _render_quantity(call, db, config, fzr, variant_id, 1)
 
 
 @router.callback_query(F.data.startswith("qty:"))
-async def cb_qty(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+async def cb_qty(
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient
+) -> None:
     _, vid, n = call.data.split(":", 2)
-    await _render_quantity(call, db, config, int(vid), int(n))
+    await _render_quantity(call, db, config, fzr, int(vid), int(n))
 
 
 @router.callback_query(F.data.startswith("confirm:"))

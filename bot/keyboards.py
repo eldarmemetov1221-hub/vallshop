@@ -89,8 +89,17 @@ def variants_kb(
     kb = InlineKeyboardBuilder()
     for v in variants:
         price = money(prices[v.id], currency)
-        in_stock = stock.get(v.id, 0)
-        note = "" if in_stock > 0 else f" · {OUT_OF_STOCK_NOTE}"
+        if getattr(v, "source", "stock") == "fazercard":
+            st = stock.get(v.id)
+            if st is None:
+                note = " · ✅ в наличии"
+            elif st > 0:
+                note = f" · ✅ {st} шт"
+            else:
+                note = " · ❌ нет"
+        else:
+            in_stock = stock.get(v.id, 0) or 0
+            note = "" if in_stock > 0 else f" · {OUT_OF_STOCK_NOTE}"
         icon = getattr(v, "icon_emoji_id", None) or EMOJI["variant"]
         kb.row(_b(f"{v.title} — {price}{note}", callback_data=f"var:{v.id}", icon=icon))
     kb.row(_b("Назад", callback_data="catalog", icon=EMOJI["back"]))

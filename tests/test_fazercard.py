@@ -93,6 +93,23 @@ def test_all_categories_follows_items():
     assert "amazon_us" in ids and "steam" in ids
 
 
+def test_fazercard_stock_helper_maps_live_stock():
+    import asyncio
+    from types import SimpleNamespace
+
+    from bot.services.catalog import fazercard_stock
+
+    c = FazerCardClient(mock=True)
+    variants = [
+        SimpleNamespace(id=1, source="fazercard", fzr_kind="giftcard", fzr_a="amazon_us", fzr_b="gc10"),
+        SimpleNamespace(id=2, source="fazercard", fzr_kind="giftcard", fzr_a="amazon_us", fzr_b="gc25"),
+        SimpleNamespace(id=3, source="stock", fzr_kind=None, fzr_a=None, fzr_b=None),
+    ]
+    out = asyncio.run(fazercard_stock(c, variants))
+    assert out[1] == 5 and out[2] == 2
+    assert 3 not in out  # не-FazerCard номиналы не трогаем
+
+
 def test_cards_endpoint_sends_category_param():
     sess = _Session(_Resp(200, {"ok": True, "offers": [{"card_id": "c1", "name": "n", "price_usd": "1.00"}]}))
     c = FazerCardClient(api_key="fc_test", session=sess)
