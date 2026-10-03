@@ -26,7 +26,7 @@ from sqlalchemy import func, select
 
 from ..config import BotConfig
 from ..db import Database
-from ..db.models import Order, Product, StockItem, StockStatus, Variant
+from ..db.models import Order, Product, StockItem, StockStatus, User, Variant
 from ..services import catalog as catalog_service
 from ..services import stock as stock_service
 from ..services.pricing import _fmt_rub, margin, price_label, sale_price
@@ -1023,8 +1023,9 @@ async def msg_var_emoji(message: Message, db: Database, state: FSMContext) -> No
 async def cb_orders(call: CallbackQuery, db: Database, config: BotConfig) -> None:
     async with db.session() as session:
         rows = await session.execute(
-            select(Order, Variant.title)
+            select(Order, Variant.title, User.username)
             .join(Variant, Variant.id == Order.variant_id)
+            .join(User, User.id == Order.user_id, isouter=True)
             .order_by(Order.id.desc())
             .limit(15)
         )
@@ -1033,11 +1034,12 @@ async def cb_orders(call: CallbackQuery, db: Database, config: BotConfig) -> Non
         text = "🧾 Заказов пока нет."
     else:
         lines = ["🧾 <b>Последние заказы</b>", ""]
-        for o, vtitle in items:
+        for o, vtitle, username in items:
             total = Decimal(o.price_usd) * (o.quantity or 1)
+            who = f"@{username}" if username else f"id {o.user_id}"
             lines.append(
                 f"#{o.id} · {vtitle} ×{o.quantity or 1} · "
-                f"{texts.money(total, config.currency)} · {o.status} · user {o.user_id}"
+                f"{texts.money(total, config.currency)} · {o.status} · {who} (<code>{o.user_id}</code>)"
             )
         text = "\n".join(lines)
     kb = InlineKeyboardBuilder()
