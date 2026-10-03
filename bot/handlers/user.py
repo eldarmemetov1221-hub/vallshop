@@ -280,11 +280,8 @@ async def cb_buy(
     variant_id = int(call.data.split(":", 1)[1])
     async with db.session() as session:
         variant = await catalog_service.get_variant(session, variant_id)
-        is_topup = bool(
-            variant and variant.is_active
-            and variant.source == "fazercard" and variant.fzr_kind == "topup"
-        )
-    if is_topup:
+        needs_fields = bool(variant and variant.is_active and _needs_fields(variant))
+    if needs_fields:
         await _start_topup(call, config, fzr, state, variant)
         return
     await _render_quantity(call, db, config, fzr, variant_id, 1)
@@ -298,23 +295,39 @@ async def cb_qty(
     await _render_quantity(call, db, config, fzr, int(vid), int(n))
 
 
+def _needs_fields(variant) -> bool:
+    """Нужен ли сбор данных перед покупкой (топап или Telegram Stars/Premium)."""
+    return (
+        variant.source == "fazercard"
+        and (variant.fzr_kind == "topup"
+             or variant.fzr_a in ("telegram_stars", "telegram_premium"))
+    )
+
+
 # ── Покупка топапа: сбор данных игрока (fields) ──────────────────────────────
 async def _start_topup(call, config, fzr, state, variant) -> None:
     price = sale_price(variant, config.default_markup_percent)
-    try:
-        meta = await asyncio.to_thread(fzr.topup_meta, variant.fzr_a)
-    except Exception:  # noqa: BLE001
-        await call.answer("Поставщик недоступен, попробуйте позже", show_alert=True)
-        return
-    fields = meta.get("fields") or []
+    note = None
+    if variant.fzr_a in ("telegram_stars", "telegram_premium"):
+        # Telegram Stars/Premium: нужен только @username получателя.
+        fields = [{"key": "telegram_username", "label": "Получатель (@username)", "type": "text"}]
+        note = "Введите Telegram @username получателя — зачисление придёт на него."
+    else:
+        try:
+            meta = await asyncio.to_thread(fzr.topup_meta, variant.fzr_a)
+        except Exception:  # noqa: BLE001
+            await call.answer("Поставщик недоступен, попробуйте позже", show_alert=True)
+            return
+        fields = meta.get("fields") or []
+        note = meta.get("note")
     await state.set_state(BuyFlow.collecting)
     await state.update_data(
         vid=variant.id, fields=fields, idx=0, answers={},
         price_str=texts.money(price, config.currency), title=variant.title,
     )
     intro = f"🧩 <b>{variant.title}</b>\nЦена: <b>{texts.money(price, config.currency)}</b>"
-    if meta.get("note"):
-        intro += f"\n\nℹ️ {meta['note']}"
+    if note:
+        intro += f"\n\nℹ️ {note}"
     await call.message.answer(intro)
     await _ask_next(call.message, state)
     await call.answer()

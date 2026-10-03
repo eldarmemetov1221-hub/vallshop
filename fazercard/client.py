@@ -279,6 +279,16 @@ class FazerCardClient:
         body = {"category_id": category_id, "offer_id": offer_id, "fields": dict(fields)}
         return self._request("POST", "/api/v2/topups/order", json_body=body, idempotency_key=idempotency_key)
 
+    def order_telegram_stars(self, *, telegram_username: str, quantity: int, idempotency_key: Optional[str] = None):
+        """POST /telegram/stars/buy -> звёзды на username (quantity 50–10000)."""
+        body = {"telegram_username": telegram_username, "quantity": int(quantity)}
+        return self._request("POST", "/api/v2/telegram/stars/buy", json_body=body, idempotency_key=idempotency_key)
+
+    def order_telegram_premium(self, *, telegram_username: str, months: int, idempotency_key: Optional[str] = None):
+        """POST /telegram/premium/buy -> Premium на username (months 3/6/12)."""
+        body = {"telegram_username": telegram_username, "months": int(months)}
+        return self._request("POST", "/api/v2/telegram/premium/buy", json_body=body, idempotency_key=idempotency_key)
+
     def get_order(self, order_id: str) -> Dict[str, Any]:
         return self._request("GET", f"/api/v2/orders/{order_id}")
 
@@ -368,6 +378,8 @@ class FazerCardClient:
                 {"id": "amazon_us", "name": "Amazon (US)"},
                 {"id": "steam", "name": "Steam"},
             ], "meta": {"has_more": False, "next_cursor": None}}
+        if path.endswith("/stars/buy") or path.endswith("/premium/buy"):
+            return {"ok": True, "order": {"id": "tg-mock", "status": "completed"}}
         if path.endswith("/order"):
             qty = int((json_body or {}).get("quantity", 1))
             codes = [f"MOCK-{i+1}" for i in range(max(1, qty))]

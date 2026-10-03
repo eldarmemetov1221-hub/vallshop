@@ -167,6 +167,47 @@ class _PendingFzr:
         return {"ok": True, "order": {"id": order_id, "status": "completed", "keys": ["LATE-1"]}}
 
 
+class _StarsFzr:
+    """Telegram Stars: ловит вызов stars-эндпоинта, завершает без кода."""
+
+    def __init__(self):
+        self.called = None
+
+    def order_telegram_stars(self, *, telegram_username, quantity, idempotency_key=None):
+        self.called = (telegram_username, quantity)
+        return {"ok": True, "order": {"id": "tg1", "status": "completed"}}
+
+
+@pytest.mark.asyncio
+async def test_telegram_stars_uses_stars_endpoint(db):
+    async with db.session() as s:
+        p = Product(game="TG", title="Telegram Stars")
+        s.add(p)
+        await s.flush()
+        v = Variant(
+            product_id=p.id, title="Telegram Stars · 50 Stars",
+            liog_product_id=0, liog_variation_id=-1, cost_usd=Decimal("0.76"),
+            source="fazercard", fzr_kind="giftcard", fzr_a="telegram_stars", fzr_b="c50",
+        )
+        s.add(v)
+        await order_service.ensure_user(s, 7, "u", "U")
+        await balance_service.credit(s, 7, Decimal("10"))
+        await s.commit()
+        vid = v.id
+
+    fzr = _StarsFzr()
+    async with db.session() as s:
+        v = await s.get(Variant, vid)
+        order, codes = await order_service.purchase_from_balance(
+            s, user_id=7, variant=v, unit_price=Decimal("0.88"), quantity=1,
+            fzr=fzr, topup_fields={"telegram_username": "@test"},
+        )
+        await s.commit()
+        assert fzr.called == ("@test", 50)   # username + распознанное кол-во звёзд
+        assert order.status == OrderStatus.COMPLETED
+        assert codes == []                    # доставка на username, без кода
+
+
 class _TopupFzr:
     """Топап: принимает поля игрока, завершает без кода (на аккаунт)."""
 

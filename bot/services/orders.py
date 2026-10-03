@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -39,6 +40,16 @@ class InsufficientBalance(PurchaseError):
 
 class SupplierError(PurchaseError):
     """Ошибка на стороне поставщика buy-on-demand (FazerCard и т.п.)."""
+
+
+def _first_int(text: Optional[str]) -> Optional[int]:
+    m = re.search(r"\d+", text or "")
+    return int(m.group()) if m else None
+
+
+def _no_code_delivery(variant: Variant) -> bool:
+    """Доставка без кода (на аккаунт/username): топапы и Telegram Stars/Premium."""
+    return variant.fzr_a in ("telegram_stars", "telegram_premium")
 
 
 def new_client_ref() -> str:
@@ -154,8 +165,28 @@ async def _fulfill_fazercard(
     await session.flush()
 
     kind = variant.fzr_kind
+    fields = topup_fields or {}
 
     def _call():
+        # Telegram Stars / Premium — спец-эндпоинты с получателем (username).
+        if variant.fzr_a == "telegram_stars":
+            uname = (fields.get("telegram_username") or "").strip()
+            amount = _first_int(variant.title)
+            if not uname:
+                raise SupplierError("Не указан Telegram @username получателя")
+            if not amount:
+                raise SupplierError("Не удалось определить количество звёзд")
+            return fzr.order_telegram_stars(
+                telegram_username=uname, quantity=amount, idempotency_key=order.client_ref,
+            )
+        if variant.fzr_a == "telegram_premium":
+            uname = (fields.get("telegram_username") or "").strip()
+            months = _first_int(variant.title)
+            if not uname:
+                raise SupplierError("Не указан Telegram @username получателя")
+            return fzr.order_telegram_premium(
+                telegram_username=uname, months=months, idempotency_key=order.client_ref,
+            )
         if kind == "gamekey":
             return fzr.order_gamekey(
                 game_id=variant.fzr_a, key_id=variant.fzr_b,
@@ -169,7 +200,7 @@ async def _fulfill_fazercard(
         if kind == "topup":
             return fzr.order_topup(
                 category_id=variant.fzr_a, offer_id=variant.fzr_b,
-                fields=topup_fields or {}, idempotency_key=order.client_ref,
+                fields=fields, idempotency_key=order.client_ref,
             )
         raise SupplierError(f"Неизвестный тип FazerCard: {kind}")
 
@@ -189,8 +220,8 @@ async def _fulfill_fazercard(
         if codes:
             order.delivery_code = "\n".join(codes)
             order.status = OrderStatus.COMPLETED
-        elif variant.fzr_kind == "topup":
-            # Топап зачисляется прямо на игровой аккаунт — кода нет.
+        elif variant.fzr_kind == "topup" or _no_code_delivery(variant):
+            # Топап / Telegram Stars|Premium — зачисляется на аккаунт, кода нет.
             order.status = OrderStatus.COMPLETED
         # иначе (ключ/карта без кода) — остаёмся FULFILLING, коды дотянет поллер
         await session.flush()
@@ -222,8 +253,8 @@ async def poll_fazercard(
             order.status = OrderStatus.COMPLETED
         else:
             variant = await session.get(Variant, order.variant_id)
-            if variant and variant.fzr_kind == "topup":
-                order.status = OrderStatus.COMPLETED  # зачислено на аккаунт
+            if variant and (variant.fzr_kind == "topup" or _no_code_delivery(variant)):
+                order.status = OrderStatus.COMPLETED  # зачислено на аккаунт/username
             else:
                 order.status = OrderStatus.FAILED  # ключ/карта без кода — ошибка
     elif FazerCardClient.status_is_terminal_failed(data):
