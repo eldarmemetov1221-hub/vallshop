@@ -26,6 +26,7 @@ _ASSETS = Path(__file__).parent / "assets"
 
 # Логические имена баннеров -> файл.
 BANNERS = {
+    "main": _ASSETS / "banner_main.jpg",
     "catalog": _ASSETS / "banner_catalog.jpg",
     "profile": _ASSETS / "banner_profile.jpg",
 }

@@ -51,13 +51,13 @@ async def cmd_start(message: Message, db: Database, config: BotConfig) -> None:
         await session.commit()
     await _clear_reply_keyboard(message)
     is_admin = config.is_admin(message.from_user.id)
-    await render(message, banner="catalog", caption=texts.START, reply_markup=kb.main_menu_kb(is_admin))
+    await render(message, banner="main", caption=texts.START, reply_markup=kb.main_menu_kb(is_admin))
 
 
 @router.message(Command("menu"))
 async def cmd_menu(message: Message, config: BotConfig) -> None:
     is_admin = config.is_admin(message.from_user.id)
-    await render(message, banner="catalog", caption=texts.START, reply_markup=kb.main_menu_kb(is_admin))
+    await render(message, banner="main", caption=texts.START, reply_markup=kb.main_menu_kb(is_admin))
 
 
 @router.message(F.text == "🛍 Каталог")
@@ -71,7 +71,7 @@ async def msg_catalog(message: Message, db: Database) -> None:
 @router.callback_query(F.data == "menu")
 async def cb_menu(call: CallbackQuery, config: BotConfig) -> None:
     is_admin = config.is_admin(call.from_user.id)
-    await render(call, banner="catalog", caption=texts.START, reply_markup=kb.main_menu_kb(is_admin))
+    await render(call, banner="main", caption=texts.START, reply_markup=kb.main_menu_kb(is_admin))
     await call.answer()
 
 
