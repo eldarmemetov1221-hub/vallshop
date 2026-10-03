@@ -41,6 +41,9 @@ EMOJI = {
     "product": "5298953332079999355",   # товар PUBG Mobile
     "variant": "5242743089327513390",   # номиналы UC
     "admin": "5778570255555105942",     # админ-панель
+    "copy": "6028171274939797252",       # скопировать адрес
+    "paylink": "5902206159095339799",    # страница оплаты
+    "check": "6039859895291877126",      # проверить оплату
 }
 
 
@@ -185,13 +188,17 @@ def topup_payment_kb(
     kb = InlineKeyboardBuilder()
     if address:
         kb.row(
-            InlineKeyboardButton(
-                text="📋 Скопировать адрес", copy_text=CopyTextButton(text=address)
+            _b(
+                "Скопировать адрес",
+                icon=EMOJI["copy"],
+                copy_text=CopyTextButton(text=address),
             )
         )
     if checkout_url:
-        kb.row(_b("🌐 Страница оплаты", url=checkout_url))
-    kb.row(_b("🔄 Проверить оплату", callback_data=f"tucheck:{topup_id}", style="success"))
+        kb.row(_b("Страница оплаты", url=checkout_url, icon=EMOJI["paylink"]))
+    kb.row(
+        _b("Проверить оплату", callback_data=f"tucheck:{topup_id}", style="success", icon=EMOJI["check"])
+    )
     kb.row(_b("В профиль", callback_data="profile", icon=EMOJI["back"]))
     return kb.as_markup()
 

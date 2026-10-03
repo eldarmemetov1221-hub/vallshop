@@ -103,7 +103,8 @@ async def cb_product(call: CallbackQuery, db: Database, config: BotConfig) -> No
         await call.answer("Нет доступных номиналов", show_alert=True)
         return
 
-    caption = f"<b>{product.title}</b>"
+    prod_emoji = texts.ce(product.icon_emoji_id or "5298953332079999355", "🎮")
+    caption = f"{prod_emoji} <b>{product.title}</b>"
     if product.description:
         caption += f"\n{product.description}"
     caption += "\n\nВыберите номинал:"

@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+import os
 from decimal import Decimal
+
+_CE = os.getenv("CUSTOM_EMOJI", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def ce(emoji_id: str, fallback: str = "•") -> str:
+    """Премиум-эмодзи через <tg-emoji>, либо обычный fallback (если выключено)."""
+    if _CE and emoji_id:
+        return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+    return fallback
 
 
 def money(amount: Decimal, currency: str = "USDT") -> str:
@@ -10,13 +20,13 @@ def money(amount: Decimal, currency: str = "USDT") -> str:
 
 
 START = (
-    '<tg-emoji emoji-id="5985478698722136468">👋</tg-emoji> '
+    f'{ce("5985478698722136468", "👋")} '
     "Добро пожаловать в <b>VallShop</b> — магазин цифровых товаров.\n\n"
     "Пополните баланс в USDT и покупайте — код придёт сюда, в чат."
 )
 
 CATALOG_EMPTY = "Каталог пока пуст. Загляните позже 🙌"
-CHOOSE_PRODUCT = "🛍 <b>Каталог</b>\nВыберите товар:"
+CHOOSE_PRODUCT = f'{ce("5805550320985578625", "🛍")} <b>Каталог</b>\nВыберите товар:'
 OUT_OF_STOCK_NOTE = "⏳ под заказ"
 
 PAYMENT_CREATED = (
@@ -77,13 +87,16 @@ OUT_OF_STOCK_FULL = "😔 Товара сейчас нет в наличии. З
 
 # ── Профиль / баланс / пополнение ──────────────────────────────────────────
 PROFILE = (
-    "👤 <b>Мой профиль</b>\n\n"
+    f'{ce("6035084557378654059", "👤")} <b>Мой профиль</b>\n\n'
     "ID: <code>{user_id}</code>\n"
     "Баланс: <b>{balance}</b>\n"
     "Заказов: <b>{orders}</b>"
 )
 
-BALANCE_VIEW = "🔴 <b>Мой баланс</b>\n\nТекущий баланс: <b>{balance}</b>"
+BALANCE_VIEW = (
+    f'{ce("5852806433099225341", "🔴")} <b>Мой баланс</b>\n\n'
+    "Текущий баланс: <b>{balance}</b>"
+)
 
 TOPUP_ASK_AMOUNT = (
     "🟢 <b>Пополнение баланса</b>\n\n"
@@ -94,7 +107,7 @@ TOPUP_CHOOSE_NETWORK = (
     "Сумма пополнения: <b>{amount}</b>\n\nВыберите сеть для оплаты USDT:"
 )
 TOPUP_CREATED = (
-    "🧾 <b>Счёт на пополнение</b>\n\n"
+    f'{ce("5915758816728718414", "🧾")} <b>Счёт на пополнение</b>\n\n'
     "Зачислим на баланс: <b>{credit}</b>\n"
     "К оплате: <b>{amount}</b>\n"
     "Сеть: <b>{network}</b>\n\n"
