@@ -62,6 +62,28 @@ def buy_kb(variant_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def after_purchase_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🛍 В каталог", callback_data="catalog"))
+    kb.row(
+        InlineKeyboardButton(text="🟢 Профиль", callback_data="profile"),
+        InlineKeyboardButton(text="⬅️ Меню", callback_data="menu"),
+    )
+    return kb.as_markup()
+
+
+def back_profile_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="profile"))
+    return kb.as_markup()
+
+
+def topup_cancel_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="balance"))
+    return kb.as_markup()
+
+
 def quantity_kb(
     variant_id: int, qty: int, total: Decimal, currency: str, max_qty: int
 ) -> InlineKeyboardMarkup:

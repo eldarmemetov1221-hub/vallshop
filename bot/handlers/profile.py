@@ -1,4 +1,7 @@
-"""Профиль покупателя: баланс, пополнение (крипта), заказы, история пополнений."""
+"""Профиль покупателя: баланс, пополнение (крипта), заказы, история пополнений.
+
+Все экраны — фото-баннер «Профиль» с подписью и inline-кнопками (см. bot.ui).
+"""
 
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ from ..payments import PaymentProvider
 from ..services import balance as balance_service
 from ..services import orders as order_service
 from ..services.balance import TOPUP_MAX, TOPUP_MIN
+from ..ui import render
 from .. import keyboards as kb
 from .. import texts
 
@@ -44,7 +48,7 @@ def _status_ru(status: str) -> str:
     }.get(str(status), str(status))
 
 
-async def _profile_text(session, config: BotConfig, user_id: int) -> str:
+async def _profile_caption(session, config: BotConfig, user_id: int) -> str:
     balance = await balance_service.get_balance(session, user_id)
     orders = await session.scalar(
         select(func.count()).select_from(Order).where(Order.user_id == user_id)
@@ -56,6 +60,12 @@ async def _profile_text(session, config: BotConfig, user_id: int) -> str:
     )
 
 
+async def _show_profile(event, db: Database, config: BotConfig, user_id: int) -> None:
+    async with db.session() as session:
+        caption = await _profile_caption(session, config, user_id)
+    await render(event, banner="profile", caption=caption, reply_markup=kb.profile_kb())
+
+
 @router.message(F.text == "🟢 Мой профиль")
 async def msg_profile(message: Message, db: Database, config: BotConfig) -> None:
     async with db.session() as session:
@@ -63,15 +73,15 @@ async def msg_profile(message: Message, db: Database, config: BotConfig) -> None
             session, message.from_user.id, message.from_user.username, message.from_user.full_name
         )
         await session.commit()
-        text = await _profile_text(session, config, message.from_user.id)
-    await message.answer(text, reply_markup=kb.profile_kb())
+    await _show_profile(message, db, config, message.from_user.id)
 
 
 @router.callback_query(F.data == "profile")
-async def cb_profile(call: CallbackQuery, db: Database, config: BotConfig) -> None:
-    async with db.session() as session:
-        text = await _profile_text(session, config, call.from_user.id)
-    await call.message.edit_text(text, reply_markup=kb.profile_kb())
+async def cb_profile(
+    call: CallbackQuery, db: Database, config: BotConfig, state: FSMContext
+) -> None:
+    await state.clear()
+    await _show_profile(call, db, config, call.from_user.id)
     await call.answer()
 
 
@@ -82,8 +92,10 @@ async def cb_balance(
     await state.clear()
     async with db.session() as session:
         balance = await balance_service.get_balance(session, call.from_user.id)
-    await call.message.edit_text(
-        texts.BALANCE_VIEW.format(balance=texts.money(balance, config.currency)),
+    await render(
+        call,
+        banner="profile",
+        caption=texts.BALANCE_VIEW.format(balance=texts.money(balance, config.currency)),
         reply_markup=kb.balance_kb(),
     )
     await call.answer()
@@ -93,8 +105,11 @@ async def cb_balance(
 @router.callback_query(F.data == "topup")
 async def cb_topup(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(TopUpFlow.waiting_amount)
-    await call.message.edit_text(
-        texts.TOPUP_ASK_AMOUNT.format(min=TOPUP_MIN, max=TOPUP_MAX)
+    await render(
+        call,
+        banner="profile",
+        caption=texts.TOPUP_ASK_AMOUNT.format(min=TOPUP_MIN, max=TOPUP_MAX),
+        reply_markup=kb.topup_cancel_kb(),
     )
     await call.answer()
 
@@ -107,22 +122,18 @@ async def msg_topup_amount(
     try:
         amount = Decimal(raw)
     except (InvalidOperation, ValueError):
-        await message.answer(
-            texts.TOPUP_BAD_AMOUNT.format(min=TOPUP_MIN, max=TOPUP_MAX)
-        )
+        await message.answer(texts.TOPUP_BAD_AMOUNT.format(min=TOPUP_MIN, max=TOPUP_MAX))
         return
     if amount < TOPUP_MIN or amount > TOPUP_MAX:
-        await message.answer(
-            texts.TOPUP_BAD_AMOUNT.format(min=TOPUP_MIN, max=TOPUP_MAX)
-        )
+        await message.answer(texts.TOPUP_BAD_AMOUNT.format(min=TOPUP_MIN, max=TOPUP_MAX))
         return
 
     await state.update_data(amount=str(amount))
     await state.set_state(TopUpFlow.waiting_network)
-    await message.answer(
-        texts.TOPUP_CHOOSE_NETWORK.format(
-            amount=texts.money(amount, config.currency)
-        ),
+    await render(
+        message,
+        banner="profile",
+        caption=texts.TOPUP_CHOOSE_NETWORK.format(amount=texts.money(amount, config.currency)),
         reply_markup=kb.topup_networks_kb(config.networks),
     )
 
@@ -181,8 +192,10 @@ async def cb_topup_network(
         await session.commit()
         topup_id = topup.id
 
-    await call.message.edit_text(
-        texts.TOPUP_CREATED.format(
+    await render(
+        call,
+        banner="profile",
+        caption=texts.TOPUP_CREATED.format(
             credit=texts.money(amount, config.currency),
             amount=texts.money(invoice.amount, invoice.currency),
             network=invoice.network,
@@ -206,11 +219,13 @@ async def cb_topup_check(
 
         if topup.status == TopUpStatus.PAID:
             balance = await balance_service.get_balance(session, call.from_user.id)
-            await call.message.edit_text(
-                texts.TOPUP_SUCCESS.format(
+            await render(
+                call, banner="profile",
+                caption=texts.TOPUP_SUCCESS.format(
                     credit=texts.money(topup.amount_usd, config.currency),
                     balance=texts.money(balance, config.currency),
-                )
+                ),
+                reply_markup=kb.back_profile_kb(),
             )
             await call.answer()
             return
@@ -222,7 +237,10 @@ async def cb_topup_check(
         ):
             topup.status = TopUpStatus.EXPIRED
             await session.commit()
-            await call.message.edit_text(texts.TOPUP_EXPIRED)
+            await render(
+                call, banner="profile", caption=texts.TOPUP_EXPIRED,
+                reply_markup=kb.back_profile_kb(),
+            )
             await call.answer()
             return
 
@@ -231,7 +249,6 @@ async def cb_topup_check(
             await call.answer(texts.TOPUP_PENDING, show_alert=True)
             return
 
-        # Оплачено -> зачисляем (идемпотентно: статус меняем один раз).
         topup.status = TopUpStatus.PAID
         topup.tx_hash = update.tx_hash
         topup.paid_at = datetime.utcnow()
@@ -239,11 +256,14 @@ async def cb_topup_check(
         await session.commit()
         balance = await balance_service.get_balance(session, call.from_user.id)
 
-    await call.message.edit_text(
-        texts.TOPUP_SUCCESS.format(
+    await render(
+        call,
+        banner="profile",
+        caption=texts.TOPUP_SUCCESS.format(
             credit=texts.money(topup.amount_usd, config.currency),
             balance=texts.money(balance, config.currency),
-        )
+        ),
+        reply_markup=kb.back_profile_kb(),
     )
     await call.answer("Баланс пополнен ✅")
 
@@ -262,7 +282,7 @@ async def cb_my_orders(call: CallbackQuery, db: Database, config: BotConfig) -> 
         items = rows.all()
 
     if not items:
-        text = texts.MY_ORDERS_TITLE + "\n\n" + texts.NO_ORDERS
+        caption = texts.MY_ORDERS_TITLE + "\n\n" + texts.NO_ORDERS
     else:
         lines = [texts.MY_ORDERS_TITLE, ""]
         for order, vtitle in items:
@@ -275,15 +295,9 @@ async def cb_my_orders(call: CallbackQuery, db: Database, config: BotConfig) -> 
                 codes = ", ".join(order.delivery_code.splitlines())
                 line += f"\n   коды: <code>{codes}</code>"
             lines.append(line)
-        text = "\n".join(lines)
+        caption = "\n".join(lines)
 
-    kb_back = kb.balance_kb  # reuse? need back-to-profile
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    from aiogram.types import InlineKeyboardButton
-
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="profile"))
-    await call.message.edit_text(text, reply_markup=b.as_markup())
+    await render(call, banner="profile", caption=caption, reply_markup=kb.back_profile_kb())
     await call.answer()
 
 
@@ -293,7 +307,7 @@ async def cb_my_topups(call: CallbackQuery, db: Database, config: BotConfig) -> 
         topups = await balance_service.list_topups(session, call.from_user.id)
 
     if not topups:
-        text = texts.MY_TOPUPS_TITLE + "\n\n" + texts.NO_TOPUPS
+        caption = texts.MY_TOPUPS_TITLE + "\n\n" + texts.NO_TOPUPS
     else:
         lines = [texts.MY_TOPUPS_TITLE, ""]
         for t in topups:
@@ -301,12 +315,7 @@ async def cb_my_topups(call: CallbackQuery, db: Database, config: BotConfig) -> 
                 f"#{t.id} · {texts.money(t.amount_usd, config.currency)} · "
                 f"{(t.network or '-')} · {_status_ru(t.status)}"
             )
-        text = "\n".join(lines)
+        caption = "\n".join(lines)
 
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    from aiogram.types import InlineKeyboardButton
-
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="profile"))
-    await call.message.edit_text(text, reply_markup=b.as_markup())
+    await render(call, banner="profile", caption=caption, reply_markup=kb.back_profile_kb())
     await call.answer()
