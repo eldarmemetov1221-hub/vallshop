@@ -2,7 +2,7 @@
 
 from aiogram import Router
 
-from . import activation, admin, admin_codes, admin_ui, profile, user
+from . import activation, admin, admin_codes, admin_stats, admin_ui, profile, user
 
 
 def build_root_router() -> Router:
@@ -10,6 +10,7 @@ def build_root_router() -> Router:
     root.include_router(admin.router)
     root.include_router(admin_ui.router)
     root.include_router(admin_codes.router)
+    root.include_router(admin_stats.router)
     root.include_router(activation.router)
     root.include_router(profile.router)
     root.include_router(user.router)
