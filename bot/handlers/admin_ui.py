@@ -56,6 +56,9 @@ class AdminUI(StatesGroup):
     add_stock = State()
     set_prod_emoji = State()
     set_var_emoji = State()
+    set_prod_title = State()
+    set_prod_desc = State()
+    add_variant_manual = State()
 
 
 def _first_custom_emoji(message: Message) -> Optional[str]:
@@ -154,9 +157,11 @@ async def _product_card(session, config: BotConfig, product_id: int):
     variants = await catalog_service.list_variants(session, product_id, only_active=False)
     counts = await stock_service.counts_by_variant(session, [v.id for v in variants])
     flag = "🟢 активен" if product.is_active else "🔴 выключен"
+    desc = product.description or "— (нет описания)"
     caption = (
         f"📦 <b>{product.title}</b>\n"
         f"Игра: {product.game} · {flag}\n"
+        f"Описание: {desc}\n"
         f"Номиналов: {len(variants)}"
     )
     kb = InlineKeyboardBuilder()
@@ -169,7 +174,14 @@ async def _product_card(session, config: BotConfig, product_id: int):
                 f"a_var:{v.id}",
             )
         )
-    kb.row(_btn("➕ Номинал", f"a_addvar:{product_id}"))
+    kb.row(
+        _btn("✏️ Название", f"a_ptitle:{product_id}"),
+        _btn("📝 Описание", f"a_pdesc:{product_id}"),
+    )
+    kb.row(
+        _btn("➕ Номинал (LioGames)", f"a_addvar:{product_id}"),
+        _btn("➕ Свой номинал", f"a_addvarm:{product_id}"),
+    )
     kb.row(
         _btn("🙂 Эмодзи", f"a_pemoji:{product_id}"),
         _btn("🔁 Вкл/выкл товар", f"a_tprod:{product_id}"),
@@ -224,7 +236,11 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
         f"Цена продажи: <b>{texts.money(price, config.currency)}</b> ({price_src})\n"
         f"Маржа: {texts.money(m, config.currency)}\n"
         f"Сток: <b>{in_stock}</b>\n"
-        f"LioGames: product {v.liog_product_id} / variation {v.liog_variation_id}"
+        + (
+            "Тип: свой товар (без LioGames)"
+            if not v.liog_product_id
+            else f"LioGames: product {v.liog_product_id} / variation {v.liog_variation_id}"
+        )
     )
     kb = InlineKeyboardBuilder()
     kb.row(
@@ -351,6 +367,124 @@ async def msg_add_variant(message: Message, db: Database, state: FSMContext) -> 
     kb.row(_btn("📥 Добавить сток", f"a_astock:{vid}"))
     kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
     await message.answer(f"✅ Номинал создан: <b>{parts[0]}</b>", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_ptitle:"))
+async def cb_prod_title(call: CallbackQuery, state: FSMContext) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.set_prod_title)
+    await state.update_data(pid=pid)
+    await call.message.edit_text(
+        "✏️ Пришлите новое <b>название</b> товара.",
+        reply_markup=_cancel_kb(f"a_prod:{pid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_prod_title)
+async def msg_prod_title(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    pid = data.get("pid")
+    title = (message.text or "").strip()
+    if not title:
+        await message.answer("Название пустое. Пришлите текст.")
+        return
+    async with db.session() as session:
+        p = await session.get(Product, pid)
+        if p:
+            p.title = title
+            await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
+    await message.answer("✅ Название обновлено", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_pdesc:"))
+async def cb_prod_desc(call: CallbackQuery, state: FSMContext) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.set_prod_desc)
+    await state.update_data(pid=pid)
+    await call.message.edit_text(
+        "📝 Пришлите <b>описание</b> товара (покажется покупателю при клике) "
+        "или <code>-</code>, чтобы убрать.",
+        reply_markup=_cancel_kb(f"a_prod:{pid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_prod_desc)
+async def msg_prod_desc(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    pid = data.get("pid")
+    raw = (message.text or "").strip()
+    async with db.session() as session:
+        p = await session.get(Product, pid)
+        if p:
+            p.description = None if raw == "-" else raw
+            await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
+    await message.answer("✅ Описание обновлено", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_addvarm:"))
+async def cb_add_variant_manual(call: CallbackQuery, state: FSMContext) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.add_variant_manual)
+    await state.update_data(pid=pid)
+    await call.message.edit_text(
+        "➕ <b>Свой номинал</b> (без LioGames, выдача из стока)\n\n"
+        "Пришлите: <code>Название | закуп_usd [| цена_usd]</code>\n"
+        "Пример: <code>Аккаунт Netflix | 2.00 | 5.00</code>",
+        reply_markup=_cancel_kb(f"a_prod:{pid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.add_variant_manual)
+async def msg_add_variant_manual(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    pid = data.get("pid")
+    parts = [p.strip() for p in (message.text or "").split("|")]
+    if len(parts) < 2:
+        await message.answer("Формат: Название | закуп_usd [| цена_usd]")
+        return
+    try:
+        cost = Decimal(parts[1])
+    except InvalidOperation:
+        await message.answer("закуп_usd — число (например 2.00)")
+        return
+    price = None
+    if len(parts) > 2 and parts[2] not in ("", "-"):
+        try:
+            price = Decimal(parts[2])
+        except InvalidOperation:
+            await message.answer("цена_usd — число или -")
+            return
+    async with db.session() as session:
+        # Уникальный отрицательный liog_variation_id (своё, не из LioGames).
+        min_vid = await session.scalar(
+            select(func.min(Variant.liog_variation_id)).where(Variant.product_id == pid)
+        )
+        new_vid = min(0, int(min_vid or 0)) - 1
+        v = Variant(
+            product_id=pid, title=parts[0],
+            liog_product_id=0, liog_variation_id=new_vid,
+            cost_usd=cost, price_usd=price,
+        )
+        session.add(v)
+        await session.commit()
+        vid = v.id
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("📥 Добавить сток", f"a_astock:{vid}"))
+    kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
+    await message.answer(
+        f"✅ Свой номинал создан: <b>{parts[0]}</b>\nДобавьте коды в сток.",
+        reply_markup=kb.as_markup(),
+    )
 
 
 @router.callback_query(F.data.startswith("a_setprice:"))
