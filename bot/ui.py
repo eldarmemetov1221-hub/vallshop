@@ -29,6 +29,7 @@ BANNERS = {
     "main": _ASSETS / "banner_main.jpg",
     "catalog": _ASSETS / "banner_catalog.jpg",
     "profile": _ASSETS / "banner_profile.jpg",
+    "reviews": _ASSETS / "banner_reviews.jpg",
 }
 
 # Кеш file_id уже загруженных баннеров (ускоряет повторную отправку).

@@ -132,7 +132,7 @@ async def _show_reviews(call: CallbackQuery, db: Database, page: int) -> None:
         caption = f"{texts.REVIEWS_TITLE}\n\n{texts.REVIEWS_EMPTY}"
         kb_b = InlineKeyboardBuilder()
         kb_b.row(InlineKeyboardButton(text="Меню", callback_data="menu"))
-        await render(call, banner="catalog", caption=caption, reply_markup=kb_b.as_markup())
+        await render(call, banner="reviews", caption=caption, reply_markup=kb_b.as_markup())
         return
     total_pages = (total + review_service.PAGE_SIZE - 1) // review_service.PAGE_SIZE
     lines = [f"{texts.REVIEWS_TITLE}", f"Всего отзывов: <b>{total}</b>", ""]
@@ -143,7 +143,7 @@ async def _show_reviews(call: CallbackQuery, db: Database, page: int) -> None:
         lines.append("")
     caption = "\n".join(lines).strip()
     await render(
-        call, banner="catalog", caption=caption,
+        call, banner="reviews", caption=caption,
         reply_markup=_reviews_page_kb(page, total_pages).as_markup(),
     )
 
