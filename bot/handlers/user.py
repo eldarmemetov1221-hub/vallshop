@@ -143,7 +143,7 @@ async def cb_product(
         if children:
             caption = f"{prod_emoji} <b>{product.title}</b>"
             if product.description:
-                caption += f"\n{product.description}"
+                caption += f"\n\n{product.description}"
             caption += "\n\nВыберите категорию:"
             markup = kb.products_kb(children, back=back, back_text="Назад")
             await render(call, banner="catalog", caption=caption, reply_markup=markup)
@@ -164,7 +164,7 @@ async def cb_product(
 
     caption = f"{prod_emoji} <b>{product.title}</b>"
     if product.description:
-        caption += f"\n{product.description}"
+        caption += f"\n\n{product.description}"
     caption += "\n\nВыберите номинал:"
     await render(
         call,

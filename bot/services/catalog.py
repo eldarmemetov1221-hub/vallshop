@@ -6,11 +6,12 @@ import asyncio
 import logging
 from typing import Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..db.models import Product, Variant
+from ..db.models import Order, Product, StockItem, Variant
 
 log = logging.getLogger("vallshop.catalog")
 
@@ -151,6 +152,78 @@ async def resolve_text_for_product(
             if ppv is not None:
                 return ppv
     return default
+
+
+async def _descendant_product_ids(session: AsyncSession, root_id: int) -> List[int]:
+    """Сам товар + все вложенные подкатегории (на любую глубину)."""
+    ids = [root_id]
+    frontier = [root_id]
+    while frontier:
+        children = list(
+            await session.scalars(
+                select(Product.id).where(Product.parent_id.in_(frontier))
+            )
+        )
+        if not children:
+            break
+        ids.extend(children)
+        frontier = children
+    return ids
+
+
+async def _variant_order_count(session: AsyncSession, variant_ids: List[int]) -> int:
+    if not variant_ids:
+        return 0
+    return int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Order)
+            .where(Order.variant_id.in_(variant_ids))
+        )
+        or 0
+    )
+
+
+async def delete_variant(session: AsyncSession, variant_id: int) -> tuple[bool, str]:
+    """Удалить номинал. Нельзя, если по нему есть заказы (ломает историю).
+
+    Возвращает ``(ok, reason)``: reason ∈ {"ok", "orders", "missing"}.
+    Сток-коды удаляются каскадно.
+    """
+    v = await session.get(Variant, variant_id)
+    if v is None:
+        return False, "missing"
+    if await _variant_order_count(session, [variant_id]):
+        return False, "orders"
+    await session.execute(sa_delete(StockItem).where(StockItem.variant_id == variant_id))
+    await session.execute(sa_delete(Variant).where(Variant.id == variant_id))
+    await session.commit()
+    return True, "ok"
+
+
+async def delete_product(session: AsyncSession, product_id: int) -> tuple[bool, str]:
+    """Удалить товар/категорию со всеми подкатегориями и номиналами.
+
+    Нельзя, если хоть по одному номиналу (на любом уровне вложенности) есть
+    заказы. Возвращает ``(ok, reason)``: reason ∈ {"ok", "orders", "missing"}.
+    """
+    root = await session.get(Product, product_id)
+    if root is None:
+        return False, "missing"
+    ids = await _descendant_product_ids(session, product_id)
+    var_ids = list(
+        await session.scalars(select(Variant.id).where(Variant.product_id.in_(ids)))
+    )
+    if await _variant_order_count(session, var_ids):
+        return False, "orders"
+    if var_ids:
+        await session.execute(
+            sa_delete(StockItem).where(StockItem.variant_id.in_(var_ids))
+        )
+        await session.execute(sa_delete(Variant).where(Variant.id.in_(var_ids)))
+    await session.execute(sa_delete(Product).where(Product.id.in_(ids)))
+    await session.commit()
+    return True, "ok"
 
 
 async def get_variant(session: AsyncSession, variant_id: int) -> Optional[Variant]:

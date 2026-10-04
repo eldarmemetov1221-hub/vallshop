@@ -156,7 +156,7 @@ async def _products_kb(session) -> InlineKeyboardMarkup:
     for p in products:
         flag = "🟢" if p.is_active else "🔴"
         kb.row(_btn(f"{flag} {p.title}", f"a_prod:{p.id}"))
-    kb.row(_btn("➕ Добавить товар", "a_addprod"))
+    kb.row(_btn("➕ Добавить категорию / товар", "a_addprod"))
     kb.row(_btn("⬅️ Назад", "a_home"))
     return kb.as_markup()
 
@@ -216,6 +216,7 @@ async def _product_card(session, config: BotConfig, product_id: int):
         _btn("⏳ Текст ожидания", f"a_txt:p:pend:{product_id}"),
         _btn("✅ Текст выдачи", f"a_txt:p:deliv:{product_id}"),
     )
+    kb.row(_btn("🗑 Удалить", f"a_pdel:{product_id}"))
     back = f"a_prod:{product.parent_id}" if product.parent_id else "a_prods"
     kb.row(_btn("⬅️ Назад", back))
     return caption, kb.as_markup()
@@ -302,6 +303,7 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
         _btn("⏳ Текст ожидания", f"a_txt:v:pend:{variant_id}"),
         _btn("✅ Текст выдачи", f"a_txt:v:deliv:{variant_id}"),
     )
+    kb.row(_btn("🗑 Удалить номинал", f"a_vdel:{variant_id}"))
     kb.row(_btn("⬅️ Назад", f"a_prod:{v.product_id}"))
     return caption, kb.as_markup(), v.product_id
 
@@ -331,6 +333,108 @@ async def cb_toggle_variant(call: CallbackQuery, db: Database, config: BotConfig
     await call.answer("Готово")
 
 
+# ── Удаление товаров/категорий и номиналов ─────────────────────────────────────
+@router.callback_query(F.data.startswith("a_pdel:"))
+async def cb_prod_delete_ask(call: CallbackQuery, db: Database) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        product = await session.get(Product, pid)
+        if not product:
+            await call.answer("Не найдено", show_alert=True)
+            return
+        kids = await catalog_service.children_count(session, pid)
+        variants = await catalog_service.list_variants(session, pid, only_active=False)
+    warn = ""
+    if kids or variants:
+        warn = (
+            f"\n\n⚠️ Внутри: подкатегорий — {kids}, номиналов — {len(variants)}. "
+            "Будет удалено всё вместе."
+        )
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("🗑 Да, удалить", f"a_pdelok:{pid}"))
+    kb.row(_btn("⬅️ Отмена", f"a_prod:{pid}"))
+    await call.message.edit_text(
+        f"Удалить <b>{product.title}</b>?{warn}\n\n"
+        "Удаление необратимо. Если по номиналам уже были заказы — "
+        "удалить нельзя (используйте «🔁 Вкл/выкл»).",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_pdelok:"))
+async def cb_prod_delete(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        product = await session.get(Product, pid)
+        parent_id = product.parent_id if product else None
+        ok, reason = await catalog_service.delete_product(session, pid)
+    if not ok and reason == "orders":
+        await call.answer(
+            "Нельзя удалить: по номиналам есть заказы. Отключите кнопкой «Вкл/выкл».",
+            show_alert=True,
+        )
+        return
+    if not ok:
+        await call.answer("Не найдено", show_alert=True)
+        return
+    # Вернуться к родителю или в список товаров.
+    if parent_id:
+        async with db.session() as session:
+            caption, markup = await _product_card(session, config, parent_id)
+        await call.message.edit_text(caption, reply_markup=markup)
+    else:
+        async with db.session() as session:
+            markup = await _products_kb(session)
+        await call.message.edit_text(
+            "📦 <b>Товары</b>\nВыберите товар:", reply_markup=markup
+        )
+    await call.answer("Удалено")
+
+
+@router.callback_query(F.data.startswith("a_vdel:"))
+async def cb_var_delete_ask(call: CallbackQuery, db: Database) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if not v:
+            await call.answer("Не найдено", show_alert=True)
+            return
+        title = v.title
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("🗑 Да, удалить", f"a_vdelok:{vid}"))
+    kb.row(_btn("⬅️ Отмена", f"a_var:{vid}"))
+    await call.message.edit_text(
+        f"Удалить номинал <b>{title}</b>?\n\n"
+        "Удаление необратимо. Если по нему уже были заказы — удалить нельзя "
+        "(используйте «🔁 Вкл/выкл»).",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_vdelok:"))
+async def cb_var_delete(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        product_id = v.product_id if v else None
+        ok, reason = await catalog_service.delete_variant(session, vid)
+    if not ok and reason == "orders":
+        await call.answer(
+            "Нельзя удалить: по номиналу есть заказы. Отключите кнопкой «Вкл/выкл».",
+            show_alert=True,
+        )
+        return
+    if not ok:
+        await call.answer("Не найдено", show_alert=True)
+        return
+    async with db.session() as session:
+        caption, markup = await _product_card(session, config, product_id)
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer("Удалено")
+
+
 # ── FSM: ввод значений ───────────────────────────────────────────────────────
 def _cancel_kb(back: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -342,31 +446,40 @@ def _cancel_kb(back: str) -> InlineKeyboardMarkup:
 async def cb_add_product(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminUI.add_product)
     await call.message.edit_text(
-        "➕ <b>Новый товар</b>\n\nПришлите: <code>игра | Название | описание</code>\n"
-        "Пример: <code>PUBG | PUBG Mobile UC (Global) | коды UC</code>",
-        reply_markup=_cancel_kb("a_home"),
+        "➕ <b>Новая категория / товар</b>\n\n"
+        "Пришлите <b>название</b> (например <code>Прямое пополнение</code> или "
+        "<code>Подарочные карты</code>).\n"
+        "Можно с описанием: <code>Название | описание</code>.\n\n"
+        "Внутрь потом добавите подкатегории или номиналы.",
+        reply_markup=_cancel_kb("a_prods"),
     )
     await call.answer()
 
 
 @router.message(AdminUI.add_product)
 async def msg_add_product(message: Message, db: Database, state: FSMContext) -> None:
-    parts = [p.strip() for p in (message.text or "").split("|")]
-    if len(parts) < 2:
-        await message.answer("Формат: игра | Название [| описание]")
+    parts = [p.strip() for p in (message.html_text or message.text or "").split("|")]
+    title = parts[0] if parts else ""
+    if not title:
+        await message.answer("Название пустое. Пришлите текст.")
         return
-    game, title = parts[0], parts[1]
-    desc = parts[2] if len(parts) > 2 else None
+    desc = parts[1] if len(parts) > 1 and parts[1] else None
     async with db.session() as session:
-        p = Product(game=game, title=title, description=desc)
+        # game — внутреннее поле (покупателю не показывается); для категории
+        # дублируем название, чтобы не требовать его отдельно.
+        p = Product(game=title[:64], title=title[:255], description=desc)
         session.add(p)
         await session.commit()
         pid = p.id
     await state.clear()
     kb = InlineKeyboardBuilder()
-    kb.row(_btn("➕ Добавить номинал", f"a_addvar:{pid}"))
+    kb.row(_btn("➕ Подкатегория", f"a_addsub:{pid}"))
+    kb.row(
+        _btn("➕ Номинал (LioGames)", f"a_addvar:{pid}"),
+        _btn("➕ Номинал FazerCard", f"a_addvarf:{pid}"),
+    )
     kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
-    await message.answer(f"✅ Товар создан: <b>{title}</b>", reply_markup=kb.as_markup())
+    await message.answer(f"✅ Создано: <b>{title}</b>", reply_markup=kb.as_markup())
 
 
 @router.callback_query(F.data.startswith("a_addvar:"))
@@ -500,13 +613,23 @@ async def msg_prod_title(message: Message, db: Database, state: FSMContext) -> N
 
 
 @router.callback_query(F.data.startswith("a_pdesc:"))
-async def cb_prod_desc(call: CallbackQuery, state: FSMContext) -> None:
+async def cb_prod_desc(call: CallbackQuery, db: Database, state: FSMContext) -> None:
     pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        p = await session.get(Product, pid)
+        cur = p.description if p else None
+    if cur:
+        cur_line = f"сейчас:\n<blockquote>{cur}</blockquote>\n\n"
+    else:
+        cur_line = "сейчас: <i>нет описания</i>\n\n"
     await state.set_state(AdminUI.set_prod_desc)
     await state.update_data(pid=pid)
     await call.message.edit_text(
-        "📝 Пришлите <b>описание</b> товара (покажется покупателю при клике) "
-        "или <code>-</code>, чтобы убрать.",
+        "📝 Редактирование <b>описания</b> (покажется покупателю при клике).\n"
+        f"{cur_line}"
+        "Пришлите новый текст. Можно использовать премиум-эмодзи и "
+        "форматирование (жирный, курсив) — они сохранятся.\n"
+        "<code>-</code> — убрать описание.",
         reply_markup=_cancel_kb(f"a_prod:{pid}"),
     )
     await call.answer()
@@ -516,7 +639,8 @@ async def cb_prod_desc(call: CallbackQuery, state: FSMContext) -> None:
 async def msg_prod_desc(message: Message, db: Database, state: FSMContext) -> None:
     data = await state.get_data()
     pid = data.get("pid")
-    raw = (message.text or "").strip()
+    # html_text сохраняет премиум-эмодзи (custom_emoji) и форматирование как HTML.
+    raw = (message.html_text or message.text or "").strip()
     async with db.session() as session:
         p = await session.get(Product, pid)
         if p:
