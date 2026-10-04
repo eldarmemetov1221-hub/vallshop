@@ -119,7 +119,11 @@ async def cb_catalog(call: CallbackQuery, db: Database, state: FSMContext) -> No
     async with db.session() as session:
         products = await catalog_service.list_products(session)
     caption = texts.CHOOSE_PRODUCT if products else texts.CATALOG_EMPTY
-    await render(call, banner="catalog", caption=caption, reply_markup=kb.products_kb(products))
+    # Верхний уровень — сеткой по 2 в ряд (категории-плитки).
+    await render(
+        call, banner="catalog", caption=caption,
+        reply_markup=kb.products_kb(products, columns=2),
+    )
     await call.answer()
 
 

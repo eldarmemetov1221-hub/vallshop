@@ -114,3 +114,51 @@ async def test_delete_product_blocked_by_nested_order(db):
     async with db.session() as s:
         from sqlalchemy import func, select
         assert await s.scalar(select(func.count()).select_from(Product)) == 2
+
+
+@pytest.mark.asyncio
+async def test_reparent_moves_into_category(db):
+    async with db.session() as s:
+        hub = Product(game="Игры", title="Игры и Сервисы")
+        pubg = Product(game="PUBG", title="PUBG Mobile Code")
+        s.add_all([hub, pubg])
+        await s.commit()
+        hub_id, pubg_id = hub.id, pubg.id
+
+    async with db.session() as s:
+        ok, reason = await catalog_service.reparent_product(s, pubg_id, hub_id)
+        assert ok and reason == "ok"
+    async with db.session() as s:
+        # теперь верхний уровень содержит только hub
+        top = await catalog_service.list_products(s, only_active=False)
+        assert {p.title for p in top} == {"Игры и Сервисы"}
+        kids = await catalog_service.list_children(s, hub_id, only_active=False)
+        assert {p.title for p in kids} == {"PUBG Mobile Code"}
+
+    # обратно на верхний уровень
+    async with db.session() as s:
+        ok, _ = await catalog_service.reparent_product(s, pubg_id, None)
+        assert ok
+    async with db.session() as s:
+        top = await catalog_service.list_products(s, only_active=False)
+        assert {p.title for p in top} == {"Игры и Сервисы", "PUBG Mobile Code"}
+
+
+@pytest.mark.asyncio
+async def test_reparent_rejects_cycle(db):
+    async with db.session() as s:
+        parent = Product(game="x", title="Родитель")
+        s.add(parent)
+        await s.flush()
+        child = Product(game="x", title="Ребёнок", parent_id=parent.id)
+        s.add(child)
+        await s.commit()
+        parent_id, child_id = parent.id, child.id
+
+    async with db.session() as s:
+        # нельзя переместить родителя внутрь его же ребёнка
+        ok, reason = await catalog_service.reparent_product(s, parent_id, child_id)
+        assert not ok and reason == "cycle"
+        # и в самого себя
+        ok, reason = await catalog_service.reparent_product(s, parent_id, parent_id)
+        assert not ok and reason == "self"

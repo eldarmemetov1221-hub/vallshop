@@ -107,12 +107,16 @@ def faq_kb(
 
 # ── Каталог ───────────────────────────────────────────────────────────────────
 def products_kb(
-    products: List[Product], back: str = "menu", back_text: str = "Меню"
+    products: List[Product],
+    back: str = "menu",
+    back_text: str = "Меню",
+    columns: int = 1,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for p in products:
         icon = getattr(p, "icon_emoji_id", None) or EMOJI["product"]
-        kb.row(_b(p.title, callback_data=f"prod:{p.id}", style="primary", icon=icon))
+        kb.add(_b(p.title, callback_data=f"prod:{p.id}", style="primary", icon=icon))
+    kb.adjust(max(1, columns))
     kb.row(_b(back_text, callback_data=back, icon=EMOJI["back"]))
     return kb.as_markup()
 

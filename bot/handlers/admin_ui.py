@@ -216,7 +216,10 @@ async def _product_card(session, config: BotConfig, product_id: int):
         _btn("⏳ Текст ожидания", f"a_txt:p:pend:{product_id}"),
         _btn("✅ Текст выдачи", f"a_txt:p:deliv:{product_id}"),
     )
-    kb.row(_btn("🗑 Удалить", f"a_pdel:{product_id}"))
+    kb.row(
+        _btn("📂 Переместить", f"a_pmove:{product_id}"),
+        _btn("🗑 Удалить", f"a_pdel:{product_id}"),
+    )
     back = f"a_prod:{product.parent_id}" if product.parent_id else "a_prods"
     kb.row(_btn("⬅️ Назад", back))
     return caption, kb.as_markup()
@@ -433,6 +436,56 @@ async def cb_var_delete(call: CallbackQuery, db: Database, config: BotConfig) ->
         caption, markup = await _product_card(session, config, product_id)
     await call.message.edit_text(caption, reply_markup=markup)
     await call.answer("Удалено")
+
+
+# ── Перемещение товара/категории ───────────────────────────────────────────────
+@router.callback_query(F.data.startswith("a_pmove:"))
+async def cb_prod_move_ask(call: CallbackQuery, db: Database) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        product = await session.get(Product, pid)
+        if not product:
+            await call.answer("Не найдено", show_alert=True)
+            return
+        candidates = await catalog_service.move_candidates(session, pid)
+        cur_parent = product.parent_id
+    kb = InlineKeyboardBuilder()
+    if cur_parent is not None:
+        kb.row(_btn("⬆️ На верхний уровень", f"a_pmv:{pid}:0"))
+    for cand in candidates:
+        if cand.id == cur_parent:
+            continue  # уже там
+        prefix = "📁 " if cand.parent_id is None else "└ "
+        kb.row(_btn(f"{prefix}{cand.title}", f"a_pmv:{pid}:{cand.id}"))
+    kb.row(_btn("⬅️ Отмена", f"a_prod:{pid}"))
+    await call.message.edit_text(
+        f"📂 Куда переместить <b>{product.title}</b>?\n"
+        "Выберите категорию-контейнер (или вынесите на верхний уровень).",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_pmv:"))
+async def cb_prod_move(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    _, raw_pid, raw_dest = call.data.split(":", 2)
+    pid = int(raw_pid)
+    dest = int(raw_dest)
+    new_parent = None if dest == 0 else dest
+    async with db.session() as session:
+        ok, reason = await catalog_service.reparent_product(session, pid, new_parent)
+    if not ok:
+        msg = {
+            "cycle": "Нельзя переместить категорию в свою же подкатегорию.",
+            "self": "Нельзя переместить в саму себя.",
+            "missing": "Не найдено.",
+        }.get(reason, "Не удалось переместить.")
+        await call.answer(msg, show_alert=True)
+        return
+    async with db.session() as session:
+        caption, markup = await _product_card(session, config, pid)
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer("Перемещено")
 
 
 # ── FSM: ввод значений ───────────────────────────────────────────────────────

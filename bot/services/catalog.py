@@ -226,6 +226,48 @@ async def delete_product(session: AsyncSession, product_id: int) -> tuple[bool, 
     return True, "ok"
 
 
+async def list_all_products(
+    session: AsyncSession, *, only_active: bool = False
+) -> List[Product]:
+    """Все товары/категории (любого уровня), отсортированные для меню."""
+    stmt = select(Product).order_by(
+        Product.parent_id, Product.sort_order, Product.id
+    )
+    if only_active:
+        stmt = stmt.where(Product.is_active.is_(True))
+    return list(await session.scalars(stmt))
+
+
+async def move_candidates(session: AsyncSession, product_id: int) -> List[Product]:
+    """Куда можно переместить товар: все, кроме самого себя и его подкатегорий."""
+    blocked = set(await _descendant_product_ids(session, product_id))
+    return [p for p in await list_all_products(session) if p.id not in blocked]
+
+
+async def reparent_product(
+    session: AsyncSession, product_id: int, new_parent_id: Optional[int]
+) -> tuple[bool, str]:
+    """Переместить товар/категорию внутрь другой категории (или на верх).
+
+    ``new_parent_id=None`` — вынести на верхний уровень. Нельзя переместить
+    товар в себя или в свою же подкатегорию (цикл). Возвращает
+    ``(ok, reason)``: reason ∈ {"ok", "self", "cycle", "missing"}.
+    """
+    p = await session.get(Product, product_id)
+    if p is None:
+        return False, "missing"
+    if new_parent_id is not None:
+        if new_parent_id == product_id:
+            return False, "self"
+        if new_parent_id in await _descendant_product_ids(session, product_id):
+            return False, "cycle"
+        if await session.get(Product, new_parent_id) is None:
+            return False, "missing"
+    p.parent_id = new_parent_id
+    await session.commit()
+    return True, "ok"
+
+
 async def get_variant(session: AsyncSession, variant_id: int) -> Optional[Variant]:
     # Жадно подгружаем product, чтобы обращение к variant.product не вызывало
     # ленивую загрузку в async-контексте (SQLAlchemy async её не допускает).
