@@ -8,7 +8,7 @@ admin.py тоже продолжают работать как запасной 
 from __future__ import annotations
 
 import asyncio
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Optional
 
 from aiogram import F, Router
@@ -303,31 +303,27 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
     if not v:
         return None, None, None
     in_stock = await stock_service.available_count(session, variant_id)
-    price = sale_price(v, config.default_markup_percent)
+    price = sale_price(v, config.default_markup_percent)  # USDT (внутр.)
     m = margin(v, config.default_markup_percent)
     vflag = "🟢 активен" if v.is_active else "🔴 выключен"
-    price_src = (
-        f"фикс {texts.money(Decimal(v.price_usd), config.currency)}"
-        if v.price_usd is not None
-        else (f"наценка {v.markup_percent}%" if v.markup_percent is not None
-              else f"наценка по умолчанию {config.default_markup_percent}%")
-    )
     rate = rates_service.get_rate()
     cost_usd = Decimal(v.cost_usd or 0)
     client_rub = price_rub_value(v, config.default_markup_percent)
-    rub_line = (
-        f"Ручная цена ₽: <b>{_fmt_rub(Decimal(v.price_rub))} ₽</b>\n"
-        if v.price_rub is not None
-        else "Ручная цена ₽: — (считается по курсу)\n"
-    )
+    # Режим цены: фикс ₽ (не плавает) / плавает по курсу / по наценке.
+    if v.price_rub is not None:
+        mode = "📌 фиксированная ₽ (не плавает)"
+    elif v.price_usd is not None:
+        mode = f"плавает по курсу ({texts.money(price)})"
+    else:
+        mk = v.markup_percent if v.markup_percent is not None else config.default_markup_percent
+        mode = f"наценка {mk}% ({texts.money(price)}) · плавает"
     caption = (
         f"🧩 <b>{v.title}</b> ({vflag})\n"
         f"Курс: 1 USDT = {_fmt_rub(rate)} ₽\n"
         f"Закуп: {texts.money(cost_usd, config.currency)} "
         f"(≈ {texts.rub(usd_to_rub(cost_usd, rate))})\n"
-        f"Цена продажи: <b>{texts.money(price, config.currency)}</b> ({price_src})\n"
-        + rub_line +
-        f"💰 Клиент платит: <b>{texts.rub(client_rub)}</b>\n"
+        f"💰 Цена клиенту: <b>{texts.rub(client_rub)}</b>\n"
+        f"Режим цены: {mode}\n"
         f"Маржа: {texts.money(m, config.currency)} (≈ {texts.rub(usd_to_rub(m, rate))})\n"
         f"Сток: <b>{in_stock}</b>\n"
         + (
@@ -342,8 +338,8 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
     kb = InlineKeyboardBuilder()
     kb.row(_btn("✏️ Название номинала", f"a_vtitle:{variant_id}"))
     kb.row(
-        _btn("💲 Цена $", f"a_setprice:{variant_id}"),
-        _btn("💱 Цена ₽", f"a_setrub:{variant_id}"),
+        _btn("💰 Цена (₽)", f"a_setprice:{variant_id}"),
+        _btn("📌 Фикс ₽", f"a_setrub:{variant_id}"),
     )
     kb.row(
         _btn("📈 Наценка", f"a_setmarkup:{variant_id}"),
@@ -1125,9 +1121,9 @@ async def cb_fzr_offer(call: CallbackQuery, state: FSMContext) -> None:
     await call.message.edit_text(
         f"💲 <b>{cat.get('name')} · {offer.get('name')}</b>\n"
         f"Закуп у FazerCard: <b>${price}</b>{rub_hint}\n\n"
-        "Пришлите вашу <b>цену продажи</b> в USDT (например <code>12.00</code>) "
+        "Пришлите вашу <b>цену продажи в рублях</b> (например <code>299</code>) "
         "или <code>-</code>, чтобы продавать по закупу.\n"
-        "Клиенту она покажется в рублях по текущему курсу.",
+        "Цена плавает по курсу (пересчитается автоматически при его изменении).",
         reply_markup=_cancel_kb(f"a_prod:{pid}"),
     )
     await call.answer()
@@ -1147,13 +1143,16 @@ async def msg_fzr_price(message: Message, db: Database, state: FSMContext) -> No
         cost = Decimal(str(offer.get("price_usd") or "0"))
     except InvalidOperation:
         cost = Decimal("0")
+    # Цена вводится в рублях → храним USDT по курсу (плавает).
     price = None
     if raw != "-":
         try:
-            price = Decimal(raw)
+            rub = Decimal(raw)
         except InvalidOperation:
             await message.answer("Число или -")
             return
+        rate = rates_service.get_rate()
+        price = (rub / rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     title = f"{cat.get('name')} · {offer.get('name')}".strip(" ·")
     edit_vid = data.get("edit_vid")
     async with db.session() as session:
@@ -1377,9 +1376,12 @@ async def cb_set_price(call: CallbackQuery, state: FSMContext) -> None:
     vid = int(call.data.split(":", 1)[1])
     await state.set_state(AdminUI.set_price)
     await state.update_data(vid=vid)
+    rate = rates_service.get_rate()
     await call.message.edit_text(
-        "💲 Пришлите фикс-цену в USDT (например <code>5.50</code>) "
-        "или <code>-</code>, чтобы убрать (считать по наценке).",
+        f"💰 Пришлите цену продажи <b>в рублях</b> (например <code>299</code>).\n"
+        f"Курс сейчас: 1 USDT = {_fmt_rub(rate)} ₽ — цена будет плавать по курсу "
+        "(при его изменении рублёвая цена пересчитается автоматически).\n"
+        "<code>-</code> — убрать (считать по наценке).",
         reply_markup=_cancel_kb(f"a_var:{vid}"),
     )
     await call.answer()
@@ -1390,6 +1392,7 @@ async def msg_set_price(message: Message, db: Database, config: BotConfig, state
     data = await state.get_data()
     vid = data.get("vid")
     raw = (message.text or "").strip().replace(",", ".")
+    rate = rates_service.get_rate()
     async with db.session() as session:
         v = await session.get(Variant, vid)
         if not v:
@@ -1398,17 +1401,26 @@ async def msg_set_price(message: Message, db: Database, config: BotConfig, state
             return
         if raw == "-":
             v.price_usd = None
+            v.price_rub = None
         else:
             try:
-                v.price_usd = Decimal(raw)
+                rub = Decimal(raw)
             except InvalidOperation:
                 await message.answer("Число или -")
                 return
+            # Рубли → USDT по курсу; храним USDT (цена плавает), фикс-₽ убираем.
+            v.price_usd = (rub / rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            v.price_rub = None
         await session.commit()
+        client_rub = price_rub_value(v, config.default_markup_percent)
     await state.clear()
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
-    await message.answer("✅ Цена обновлена", reply_markup=kb.as_markup())
+    await message.answer(
+        f"✅ Цена обновлена. Клиент видит: <b>{texts.rub(client_rub)}</b> "
+        "(плавает по курсу).",
+        reply_markup=kb.as_markup(),
+    )
 
 
 @router.callback_query(F.data.startswith("a_setmarkup:"))
