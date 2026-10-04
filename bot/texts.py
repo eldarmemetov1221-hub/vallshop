@@ -19,6 +19,14 @@ def money(amount: Decimal, currency: str = "USDT") -> str:
     return f"{Decimal(amount):.2f} {currency}"
 
 
+def rub(amount: Decimal) -> str:
+    """Рубли: целое — без копеек, иначе с двумя знаками. «86 ₽» / «86.50 ₽»."""
+    d = Decimal(amount)
+    if d == d.to_integral_value():
+        return f"{int(d)} ₽"
+    return f"{d:.2f} ₽"
+
+
 START = (
     f'{ce("5985478698722136468", "👋")} '
     "Добро пожаловать в <b>VallShop</b> — магазин цифровых товаров.\n\n"
@@ -158,11 +166,11 @@ BALANCE_VIEW = (
 
 TOPUP_ASK_AMOUNT = (
     "🟢 <b>Пополнение баланса</b>\n\n"
-    "Введите сумму пополнения в USDT (от {min} до {max}):"
+    "Введите сумму пополнения в рублях (от {min} до {max} ₽):"
 )
-TOPUP_BAD_AMOUNT = "Введите число от {min} до {max}, например 10"
+TOPUP_BAD_AMOUNT = "Введите число от {min} до {max}, например 500"
 TOPUP_CHOOSE_METHOD = (
-    "🟢 <b>Пополнение баланса</b>\n\nВыберите способ пополнения (сеть USDT):"
+    "🟢 <b>Пополнение баланса</b>\n\nВыберите способ оплаты (сеть USDT):"
 )
 TOPUP_CHOOSE_NETWORK = (
     "Сумма пополнения: <b>{amount}</b>\n\nВыберите сеть для оплаты USDT:"
@@ -170,7 +178,7 @@ TOPUP_CHOOSE_NETWORK = (
 TOPUP_CREATED = (
     f'{ce("5915758816728718414", "🧾")} <b>Счёт на пополнение</b>\n\n'
     "Зачислим на баланс: <b>{credit}</b>\n"
-    "К оплате: <b>{amount}</b>\n"
+    "К оплате (USDT): <b>{amount}</b>\n"
     "Сеть: <b>{network}</b>\n\n"
     "Адрес для перевода USDT:\n<code>{address}</code>\n\n"
     "⚠️ Переведите <b>ровно</b> указанную сумму в сети <b>{network}</b>.\n"

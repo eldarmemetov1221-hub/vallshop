@@ -19,7 +19,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .db.models import Product, Variant
-from .texts import OUT_OF_STOCK_NOTE, money
+from .texts import OUT_OF_STOCK_NOTE, money, rub
 
 
 def _truthy(v: str) -> bool:
@@ -250,7 +250,7 @@ def quantity_kb(
     )
     kb.row(
         _b(
-            f"✅ Купить за {money(total, currency)}",
+            f"✅ Купить за {rub(total)}",
             callback_data=f"confirm:{variant_id}:{qty}",
             style="success",
         )

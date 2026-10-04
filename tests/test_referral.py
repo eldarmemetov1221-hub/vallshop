@@ -55,8 +55,8 @@ async def test_accrue_5_percent_and_idempotent(db):
         await referral_service.accrue_for_order(s, o)  # повтор — без дубля
         await s.commit()
         ref = await s.get(User, 1)
-        assert ref.ref_balance_usdt == Decimal("5.00")
-        assert ref.ref_earned_usdt == Decimal("5.00")
+        assert ref.ref_balance_rub == Decimal("5.00")
+        assert ref.ref_earned_rub == Decimal("5.00")
 
 
 @pytest.mark.asyncio
@@ -81,27 +81,27 @@ async def test_reverse_on_refund(db):
         o = await _mk_order(s, 2, "100")
         await referral_service.accrue_for_order(s, o)
         await s.commit()
-        assert (await s.get(User, 1)).ref_balance_usdt == Decimal("5.00")
+        assert (await s.get(User, 1)).ref_balance_rub == Decimal("5.00")
         o.status = OrderStatus.REFUNDED
         await referral_service.reverse_for_order(s, o)
         await s.commit()
-        assert (await s.get(User, 1)).ref_balance_usdt == Decimal("0.00")
+        assert (await s.get(User, 1)).ref_balance_rub == Decimal("0.00")
 
 
 @pytest.mark.asyncio
 async def test_transfer_min_and_success(db):
     async with db.session() as s:
-        u = User(id=1, username="ref", ref_balance_usdt=Decimal("0.50"))
+        u = User(id=1, username="ref", ref_balance_rub=Decimal("0.50"))
         s.add(u); await s.flush()
-        ok, bal, need = await referral_service.transfer_to_balance(s, 1, "USDT")
-        assert ok is False and need == Decimal("1")  # ниже минимума
-        u.ref_balance_usdt = Decimal("5.00")
+        ok, bal, need = await referral_service.transfer_to_balance(s, 1, "RUB")
+        assert ok is False and need == Decimal("50")  # ниже минимума
+        u.ref_balance_rub = Decimal("60.00")
         await s.flush()
-        ok, amount, _ = await referral_service.transfer_to_balance(s, 1, "USDT")
+        ok, amount, _ = await referral_service.transfer_to_balance(s, 1, "RUB")
         await s.commit()
-        assert ok and amount == Decimal("5.00")
-        assert (await s.get(User, 1)).ref_balance_usdt == Decimal("0.00")
-        assert await balance_service.get_balance(s, 1) == Decimal("5.00")
+        assert ok and amount == Decimal("60.00")
+        assert (await s.get(User, 1)).ref_balance_rub == Decimal("0.00")
+        assert await balance_service.get_balance(s, 1) == Decimal("60.00")
 
 
 @pytest.mark.asyncio
@@ -117,4 +117,4 @@ async def test_stats_counts(db):
         st = await referral_service.stats(s, 1)
         assert st["invited"] == 2
         assert st["with_purchase"] == 1
-        assert st["bal_usdt"] == Decimal("2.50")
+        assert st["bal_rub"] == Decimal("2.50")

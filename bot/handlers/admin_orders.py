@@ -248,7 +248,7 @@ async def _order_detail(session, order_id: int) -> tuple[str, InlineKeyboardMark
         f"Категория/товар: <b>{product_title}</b>",
         f"Номинал: <b>{title}</b>",
         f"Количество: <b>{order.quantity}</b>",
-        f"Сумма: <b>{texts.money(Decimal(order.price_usd) * (order.quantity or 1))}</b>",
+        f"Сумма: <b>{texts.rub(Decimal(order.price_usd) * (order.quantity or 1))}</b>",
         f"Оформлен: {when}",
     ]
     if order.supplier_order_id:
@@ -407,7 +407,7 @@ async def cb_cancel(call: CallbackQuery, db: Database) -> None:
         )
         await session.commit()
     msg = settings_service.fmt(
-        cancel_text or texts.CANCEL_TEXT_DEFAULT, ref=ref, amount=texts.money(refund)
+        cancel_text or texts.CANCEL_TEXT_DEFAULT, ref=ref, amount=texts.rub(refund)
     )
     try:
         await call.message.bot.send_message(user_id, msg)
@@ -416,7 +416,7 @@ async def cb_cancel(call: CallbackQuery, db: Database) -> None:
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К не выполненным", "co_list"))
     await call.message.edit_text(
-        f"🚫 Заказ отменён, покупателю возвращено <b>{texts.money(refund)}</b>.",
+        f"🚫 Заказ отменён, покупателю возвращено <b>{texts.rub(refund)}</b>.",
         reply_markup=kb.as_markup(),
     )
     await call.answer("Отменено")

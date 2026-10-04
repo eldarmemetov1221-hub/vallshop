@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -21,6 +21,7 @@ from ..db.models import Order, OrderStatus, TopUp, TopUpStatus, Variant
 from ..payments import PaymentProvider
 from ..services import balance as balance_service
 from ..services import orders as order_service
+from ..services import rates as rates_service
 from ..services.balance import TOPUP_MAX, TOPUP_MIN
 from ..ui import render
 from .. import keyboards as kb
@@ -55,7 +56,7 @@ async def _profile_caption(session, config: BotConfig, user_id: int) -> str:
     )
     return texts.PROFILE.format(
         user_id=user_id,
-        balance=texts.money(balance, config.currency),
+        balance=texts.rub(balance),
         orders=int(orders or 0),
     )
 
@@ -95,7 +96,7 @@ async def cb_balance(
     await render(
         call,
         banner="profile",
-        caption=texts.BALANCE_VIEW.format(balance=texts.money(balance, config.currency)),
+        caption=texts.BALANCE_VIEW.format(balance=texts.rub(balance)),
         reply_markup=kb.balance_kb(),
     )
     await call.answer()
@@ -159,16 +160,21 @@ async def msg_topup_amount(
         return
     await state.clear()
 
+    # Баланс рублёвый: клиент вводит сумму в ₽, платит криптой в USDT по курсу.
+    rate = rates_service.get_rate()
+    usdt_to_pay = (amount / rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
     async with db.session() as session:
         await order_service.ensure_user(
             session, message.from_user.id, message.from_user.username, message.from_user.full_name
         )
+        # amount_usd хранит сумму ЗАЧИСЛЕНИЯ — теперь это рубли.
         topup = await balance_service.create_topup(
             session, user_id=message.from_user.id, amount_usd=amount
         )
         try:
             invoice = await provider.create_invoice(
-                amount=amount,
+                amount=usdt_to_pay,
                 client_ref=topup.client_ref,
                 description=f"Balance top-up {message.from_user.id}",
                 notify_url=config.notify_url,
@@ -197,7 +203,7 @@ async def msg_topup_amount(
         message,
         banner="profile",
         caption=texts.TOPUP_CREATED.format(
-            credit=texts.money(amount, config.currency),
+            credit=texts.rub(amount),
             amount=texts.money(invoice.amount, invoice.currency),
             network=invoice.network,
             address=invoice.address,
@@ -222,8 +228,8 @@ async def cb_topup_check(
             await render(
                 call, banner="profile",
                 caption=texts.TOPUP_SUCCESS.format(
-                    credit=texts.money(topup.amount_usd, config.currency),
-                    balance=texts.money(balance, config.currency),
+                    credit=texts.rub(topup.amount_usd),
+                    balance=texts.rub(balance),
                 ),
                 reply_markup=kb.back_profile_kb(),
             )
@@ -260,8 +266,8 @@ async def cb_topup_check(
         call,
         banner="profile",
         caption=texts.TOPUP_SUCCESS.format(
-            credit=texts.money(topup.amount_usd, config.currency),
-            balance=texts.money(balance, config.currency),
+            credit=texts.rub(topup.amount_usd),
+            balance=texts.rub(balance),
         ),
         reply_markup=kb.back_profile_kb(),
     )
@@ -289,7 +295,7 @@ async def cb_my_orders(call: CallbackQuery, db: Database, config: BotConfig) -> 
             total = Decimal(order.price_usd) * (order.quantity or 1)
             line = (
                 f"#{order.id} · {vtitle} ×{order.quantity or 1} · "
-                f"{texts.money(total, config.currency)} · {_status_ru(order.status)}"
+                f"{texts.rub(total)} · {_status_ru(order.status)}"
             )
             if order.status == OrderStatus.COMPLETED and order.delivery_code:
                 codes = ", ".join(order.delivery_code.splitlines())
@@ -312,7 +318,7 @@ async def cb_my_topups(call: CallbackQuery, db: Database, config: BotConfig) -> 
         lines = [texts.MY_TOPUPS_TITLE, ""]
         for t in topups:
             lines.append(
-                f"#{t.id} · {texts.money(t.amount_usd, config.currency)} · "
+                f"#{t.id} · {texts.rub(t.amount_usd)} · "
                 f"{(t.network or '-')} · {_status_ru(t.status)}"
             )
         caption = "\n".join(lines)

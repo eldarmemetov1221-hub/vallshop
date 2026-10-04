@@ -64,8 +64,8 @@ async def _home(session) -> tuple[str, InlineKeyboardMarkup]:
         "📊 <b>Статистика</b>\n"
         f"Приглашено всего: <b>{st['total_invited']}</b>\n"
         f"Рефоводов с выплатами: <b>{st['total_referrers']}</b>\n"
-        f"Выплачено: <b>{texts.money(st['paid_usdt'])}</b>"
-        + (f" · <b>{st['paid_rub']} ₽</b>" if st["paid_rub"] > 0 else "")
+        f"Выплачено: <b>{texts.rub(st['paid_rub'])}</b>"
+        + (f" · <b>{texts.money(st['paid_usdt'])}</b>" if st["paid_usdt"] > 0 else "")
     )
     kb = InlineKeyboardBuilder()
     kb.row(_btn(f"Программа: {state} (переключить)", "rf_toggle"))

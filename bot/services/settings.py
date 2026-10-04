@@ -17,6 +17,9 @@ AUTO_REFUND = "orders_auto_refund"   # "1"/"0" — автовозврат ден
 REFUND_TEXT = "orders_refund_text"   # текст покупателю при автовозврате
 CANCEL_TEXT = "orders_cancel_text"   # текст покупателю при ручной отмене
 
+# Курс USDT→₽ (рубли за 1 USDT). Задаётся администратором.
+USDT_RATE = "usdt_rate"
+
 # Реферальная программа
 REF_ENABLED = "ref_enabled"              # "1"/"0"
 REF_PERCENT = "ref_percent"              # процент с покупок, напр. "5"

@@ -79,7 +79,7 @@ async def _detail(session, review_id: int) -> tuple[str, InlineKeyboardMarkup] |
         return None, None
     who = f"@{r.username}" if r.username else f"id {r.user_id}"
     when = r.created_at.strftime("%d.%m.%Y %H:%M") if r.created_at else "—"
-    amount = texts.money(Decimal(r.amount_usd)) if r.amount_usd is not None else "—"
+    amount = texts.rub(Decimal(r.amount_usd)) if r.amount_usd is not None else "—"
     caption = (
         f"⭐ <b>Отзыв #{r.id}</b> · {_STATUS_RU.get(r.status, r.status)}\n"
         f"Заказ: <code>{r.order_id or '—'}</code>\n"

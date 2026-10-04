@@ -56,7 +56,11 @@ def _kb() -> InlineKeyboardMarkup:
 
 
 def _fmt(label: str, u: dict, s: dict, cur: str) -> str:
-    m = lambda v: f"{v:.2f} {cur}"  # noqa: E731
+    from .. import texts
+    cost_usd = s.get("cost_usd")
+    cost_line = texts.rub(s['cost'])
+    if cost_usd:
+        cost_line += f" (≈ {texts.money(cost_usd)})"
     return (
         f"📊 <b>Статистика</b>\n"
         f"Период: <b>{label}</b>\n\n"
@@ -66,9 +70,9 @@ def _fmt(label: str, u: dict, s: dict, cur: str) -> str:
         f"🛒 <b>Продажи</b>\n"
         f"Заказов: <b>{s['orders']}</b>\n"
         f"Товаров продано: <b>{s['items']}</b>\n"
-        f"Выручка: <b>{m(s['revenue'])}</b>\n"
-        f"Себестоимость: {m(s['cost'])}\n"
-        f"Прибыль: <b>{m(s['profit'])}</b>"
+        f"Выручка: <b>{texts.rub(s['revenue'])}</b>\n"
+        f"Себестоимость: {cost_line}\n"
+        f"Прибыль: <b>{texts.rub(s['profit'])}</b>"
     )
 
 

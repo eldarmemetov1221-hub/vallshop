@@ -43,8 +43,9 @@ async def test_sales_and_profit(db):
         assert st["orders"] == 1
         assert st["items"] == 2
         assert st["revenue"] == Decimal("10.00")   # 5*2
-        assert st["cost"] == Decimal("4.00")        # 2*2
-        assert st["profit"] == Decimal("6.00")
+        assert st["cost"] == Decimal("380.00")      # 2*2 USDT × курс 95
+        assert st["cost_usd"] == Decimal("4.00")
+        assert st["profit"] == Decimal("-370.00")
         us = await stats_service.users_stats(s, None, __import__("datetime").datetime.utcnow().replace(year=2100))
         assert us["total"] == 1 and us["new"] == 1
 

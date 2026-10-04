@@ -10,12 +10,14 @@
 
 from __future__ import annotations
 
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 from typing import Optional
 
 from ..db.models import Variant
+from . import rates as rates_service
 
 _CENT = Decimal("0.01")
+_ONE = Decimal("1")
 
 
 def quantize_money(value: Decimal) -> Decimal:
@@ -47,20 +49,31 @@ def _fmt_rub(value: Decimal) -> str:
     return f"{d:.2f}"
 
 
-def price_label(variant: Variant, default_markup_percent: Decimal = Decimal("0")) -> str:
-    """Короткая цена для кнопки/карточки: «₽ / $», только заданные валюты.
+def usd_to_rub(value: Decimal, rate: Optional[Decimal] = None) -> Decimal:
+    """Перевести USD в рубли по курсу, округлив ВВЕРХ до 1 ₽."""
+    r = rate if rate is not None else rates_service.get_rate()
+    rub = Decimal(value) * Decimal(r)
+    return rub.quantize(_ONE, rounding=ROUND_CEILING)
 
-    USD (списание) берётся из sale_price; ₽ — из ручного price_rub (справочно).
-    Если ни одна цена не задана — «—».
+
+def price_rub_value(
+    variant: Variant, default_markup_percent: Decimal = Decimal("0")
+) -> Decimal:
+    """Цена продажи клиенту в рублях (целое число ₽).
+
+    Если у номинала задана ручная «Цена ₽» — берётся она (переопределение),
+    иначе цена считается из USDT-цены по курсу (вверх до 1 ₽).
     """
-    parts: list[str] = []
-    rub = getattr(variant, "price_rub", None)
-    if rub is not None:
-        parts.append(f"{_fmt_rub(rub)} ₽")
-    usd = sale_price(variant, default_markup_percent)
-    if usd and usd > 0:
-        parts.append(f"{usd:.2f} $")
-    return " / ".join(parts) if parts else "—"
+    manual = getattr(variant, "price_rub", None)
+    if manual is not None:
+        return Decimal(manual).quantize(_ONE, rounding=ROUND_CEILING)
+    return usd_to_rub(sale_price(variant, default_markup_percent))
+
+
+def price_label(variant: Variant, default_markup_percent: Decimal = Decimal("0")) -> str:
+    """Короткая цена для кнопки/карточки клиента — в рублях."""
+    rub = price_rub_value(variant, default_markup_percent)
+    return f"{_fmt_rub(rub)} ₽" if rub > 0 else "—"
 
 
 def margin(variant: Variant, default_markup_percent: Decimal = Decimal("0")) -> Decimal:

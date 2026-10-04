@@ -14,8 +14,9 @@ from ..db.models import TopUp, TopUpStatus, User
 
 _CENT = Decimal("0.01")
 
-TOPUP_MIN = Decimal("1")
-TOPUP_MAX = Decimal("500")
+# Лимиты пополнения — в рублях (баланс рублёвый).
+TOPUP_MIN = Decimal("50")
+TOPUP_MAX = Decimal("50000")
 
 
 def _q(v: Decimal) -> Decimal:

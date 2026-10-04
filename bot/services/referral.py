@@ -21,7 +21,7 @@ log = logging.getLogger("vallshop.referral")
 
 DEFAULT_PERCENT = Decimal("5")
 DEFAULT_MIN_USDT = Decimal("1")
-DEFAULT_MIN_RUB = Decimal("100")
+DEFAULT_MIN_RUB = Decimal("50")
 DEFAULT_TERMS = (
     "Приглашай друзей по своей ссылке и получай <b>5%</b> с каждой их покупки "
     "на реферальный баланс. Накопленное можно перевести на основной баланс и "
@@ -92,13 +92,14 @@ async def accrue_for_order(session: AsyncSession, order: Order) -> None:
     if referrer is None:
         return
     percent = await _percent(session)
+    # order.price_usd хранит сумму списания в рублях (валюта магазина — ₽).
     total = Decimal(order.price_usd) * (order.quantity or 1)
     amount = (total * percent / Decimal(100)).quantize(_Q, rounding=ROUND_HALF_UP)
     if amount <= 0:
         return
-    currency = "USDT"  # TODO: при добавлении RUB — брать валюту заказа
-    referrer.ref_balance_usdt = Decimal(referrer.ref_balance_usdt or 0) + amount
-    referrer.ref_earned_usdt = Decimal(referrer.ref_earned_usdt or 0) + amount
+    currency = "RUB"
+    referrer.ref_balance_rub = Decimal(referrer.ref_balance_rub or 0) + amount
+    referrer.ref_earned_rub = Decimal(referrer.ref_earned_rub or 0) + amount
     session.add(ReferralEarning(
         referrer_id=referrer.id, referral_id=buyer.id, order_id=order.id,
         kind="purchase_percent", currency=currency, amount=amount, status="credited",
@@ -129,28 +130,31 @@ async def reverse_for_order(session: AsyncSession, order: Order) -> None:
 
 
 async def transfer_to_balance(
-    session: AsyncSession, user_id: int, currency: str = "USDT"
+    session: AsyncSession, user_id: int, currency: str = "RUB"
 ) -> tuple[bool, Decimal, Decimal]:
-    """Перевести весь реф-баланс на основной. Возвращает (ok, amount, need_min)."""
+    """Перевести весь реф-баланс на основной. Возвращает (ok, amount, need_min).
+
+    Основной баланс магазина — рублёвый, поэтому перевод идёт с ₽-реф-баланса
+    на основной ₽-баланс.
+    """
     user = await session.get(User, user_id)
     if user is None:
         return False, Decimal(0), Decimal(0)
-    if currency == "RUB":
-        bal = Decimal(user.ref_balance_rub or 0)
-        raw = await settings_service.get(session, settings_service.REF_MIN_WD_RUB)
-        minv = Decimal(raw) if raw else DEFAULT_MIN_RUB
-    else:
+    if currency == "USDT":
         bal = Decimal(user.ref_balance_usdt or 0)
         raw = await settings_service.get(session, settings_service.REF_MIN_WD_USDT)
         minv = Decimal(raw) if raw else DEFAULT_MIN_USDT
+    else:
+        bal = Decimal(user.ref_balance_rub or 0)
+        raw = await settings_service.get(session, settings_service.REF_MIN_WD_RUB)
+        minv = Decimal(raw) if raw else DEFAULT_MIN_RUB
     if bal < minv or bal <= 0:
         return False, bal, minv
-    if currency == "RUB":
-        user.ref_balance_rub = Decimal(0)
-        # TODO: при добавлении RUB — зачислять на рублёвый основной баланс
-    else:
+    if currency == "USDT":
         user.ref_balance_usdt = Decimal(0)
-        await balance_service.credit(session, user_id, bal)
+    else:
+        user.ref_balance_rub = Decimal(0)
+    await balance_service.credit(session, user_id, bal)  # основной баланс в ₽
     await session.flush()
     return True, bal, minv
 

@@ -29,7 +29,10 @@ from ..db import Database
 from ..db.models import Order, Product, StockItem, StockStatus, User, Variant
 from ..services import catalog as catalog_service
 from ..services import stock as stock_service
-from ..services.pricing import _fmt_rub, margin, price_label, sale_price
+from ..services.pricing import (
+    _fmt_rub, margin, price_label, price_rub_value, sale_price, usd_to_rub,
+)
+from ..services import rates as rates_service
 from fazercard import FazerCardClient, FazerCardError
 from .. import texts
 
@@ -66,6 +69,7 @@ class AdminUI(StatesGroup):
     set_price_rub = State()
     set_text = State()
     set_banner = State()
+    set_rate = State()
     fzr_search = State()
     fzr_price = State()
 
@@ -121,6 +125,7 @@ def _panel_kb() -> InlineKeyboardMarkup:
     kb.row(_btn("🎟 Коды активации", "ac_home"))
     kb.row(_btn("⭐ Отзывы", "arv_home"), _btn("📊 Статистика", "st_home"))
     kb.row(_btn("🎨 Оформление", "ap_home"), _btn("👥 Рефералы", "rf_home"))
+    kb.row(_btn("💱 Курс USDT→₽", "a_rate"))
     kb.row(_btn("⬅️ Меню", "menu"))
     return kb.as_markup()
 
@@ -150,6 +155,38 @@ async def cb_admin_home(call: CallbackQuery, db: Database, state: FSMContext) ->
     await state.clear()
     await _show_panel(call, db, edit=True)
     await call.answer()
+
+
+@router.callback_query(F.data == "a_rate")
+async def cb_rate(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminUI.set_rate)
+    cur = _fmt_rub(rates_service.get_rate())
+    await call.message.edit_text(
+        f"💱 <b>Курс USDT→₽</b>\nСейчас: 1 USDT = <b>{cur} ₽</b>\n\n"
+        "Пришлите новый курс (например <code>95</code>). "
+        "По нему считаются рублёвые цены и зачисления.",
+        reply_markup=_cancel_kb("a_home"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_rate)
+async def msg_rate(message: Message, db: Database, state: FSMContext) -> None:
+    raw = (message.text or "").strip().replace(",", ".")
+    try:
+        rate = Decimal(raw)
+        if rate <= 0:
+            raise InvalidOperation
+    except InvalidOperation:
+        await message.answer("Введите положительное число, например 95")
+        return
+    await rates_service.set_rate(db, rate)
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ В админ-панель", "a_home"))
+    await message.answer(
+        f"✅ Курс обновлён: 1 USDT = {_fmt_rub(rate)} ₽", reply_markup=kb.as_markup()
+    )
 
 
 # ── Товары ───────────────────────────────────────────────────────────────────
@@ -274,16 +311,23 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
         else (f"наценка {v.markup_percent}%" if v.markup_percent is not None
               else f"наценка по умолчанию {config.default_markup_percent}%")
     )
+    rate = rates_service.get_rate()
+    cost_usd = Decimal(v.cost_usd or 0)
+    client_rub = price_rub_value(v, config.default_markup_percent)
     rub_line = (
-        f"Цена ₽: <b>{_fmt_rub(Decimal(v.price_rub))} ₽</b>\n"
-        if v.price_rub is not None else "Цена ₽: — (не задана)\n"
+        f"Ручная цена ₽: <b>{_fmt_rub(Decimal(v.price_rub))} ₽</b>\n"
+        if v.price_rub is not None
+        else "Ручная цена ₽: — (считается по курсу)\n"
     )
     caption = (
         f"🧩 <b>{v.title}</b> ({vflag})\n"
-        f"Закуп: {texts.money(Decimal(v.cost_usd or 0), config.currency)}\n"
+        f"Курс: 1 USDT = {_fmt_rub(rate)} ₽\n"
+        f"Закуп: {texts.money(cost_usd, config.currency)} "
+        f"(≈ {texts.rub(usd_to_rub(cost_usd, rate))})\n"
         f"Цена продажи: <b>{texts.money(price, config.currency)}</b> ({price_src})\n"
         + rub_line +
-        f"Маржа: {texts.money(m, config.currency)}\n"
+        f"💰 Клиент платит: <b>{texts.rub(client_rub)}</b>\n"
+        f"Маржа: {texts.money(m, config.currency)} (≈ {texts.rub(usd_to_rub(m, rate))})\n"
         f"Сток: <b>{in_stock}</b>\n"
         + (
             f"Тип: FazerCard · {v.fzr_kind} "
@@ -927,7 +971,10 @@ async def cb_fzr_cat(call: CallbackQuery, state: FSMContext, fzr: FazerCardClien
         label = o.get("name") or str(o.get("id"))
         extra = []
         if o.get("price_usd"):
-            extra.append(f"${o['price_usd']}")
+            try:
+                extra.append(f"${o['price_usd']} (≈{texts.rub(usd_to_rub(Decimal(str(o['price_usd']))))})")
+            except Exception:  # noqa: BLE001
+                extra.append(f"${o['price_usd']}")
         if o.get("stock") is not None:
             extra.append(f"сток {o['stock']}")
         if extra:
@@ -953,11 +1000,16 @@ async def cb_fzr_offer(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(offer=offer)
     await state.set_state(AdminUI.fzr_price)
     price = offer.get("price_usd") or "?"
+    try:
+        rub_hint = f" (≈ {texts.rub(usd_to_rub(Decimal(str(price))))})"
+    except Exception:  # noqa: BLE001
+        rub_hint = ""
     await call.message.edit_text(
         f"💲 <b>{cat.get('name')} · {offer.get('name')}</b>\n"
-        f"Закуп у FazerCard: <b>${price}</b>\n\n"
+        f"Закуп у FazerCard: <b>${price}</b>{rub_hint}\n\n"
         "Пришлите вашу <b>цену продажи</b> в USDT (например <code>12.00</code>) "
-        "или <code>-</code>, чтобы продавать по закупу.",
+        "или <code>-</code>, чтобы продавать по закупу.\n"
+        "Клиенту она покажется в рублях по текущему курсу.",
         reply_markup=_cancel_kb(f"a_prod:{pid}"),
     )
     await call.answer()
@@ -1380,7 +1432,7 @@ async def cb_orders(call: CallbackQuery, db: Database, config: BotConfig) -> Non
             who = f"@{username}" if username else f"id {o.user_id}"
             lines.append(
                 f"#{o.id} · {vtitle} ×{o.quantity or 1} · "
-                f"{texts.money(total, config.currency)} · {o.status} · {who} (<code>{o.user_id}</code>)"
+                f"{texts.rub(total)} · {o.status} · {who} (<code>{o.user_id}</code>)"
             )
         text = "\n".join(lines)
     kb = InlineKeyboardBuilder()

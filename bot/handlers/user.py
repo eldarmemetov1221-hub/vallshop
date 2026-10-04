@@ -31,7 +31,7 @@ from ..services import orders as order_service
 from ..services import stock as stock_service
 from ..services.balance import get_balance
 from ..services.orders import InsufficientBalance, OutOfStock, SupplierError
-from ..services.pricing import price_label, sale_price
+from ..services.pricing import price_label, price_rub_value, sale_price
 from ..db.models import OrderStatus
 from fazercard import FazerCardClient
 from ..ui import render
@@ -248,7 +248,7 @@ async def _render_quantity(
         if not variant or not variant.is_active:
             await call.answer("Недоступно", show_alert=True)
             return
-        price = sale_price(variant, config.default_markup_percent)
+        price = price_rub_value(variant, config.default_markup_percent)
         in_stock = await stock_service.available_count(session, variant_id)
         balance = await get_balance(session, call.from_user.id)
         ondemand = variant.source == "fazercard"
@@ -284,9 +284,9 @@ async def _render_quantity(
         banner="catalog",
         caption=texts.CHOOSE_QUANTITY.format(
             item=variant.title,
-            price=texts.money(price, config.currency),
+            price=texts.rub(price),
             stock=stock_label,
-            balance=texts.money(balance, config.currency),
+            balance=texts.rub(balance),
         ),
         reply_markup=kb.quantity_kb(variant_id, qty, total, config.currency, max_qty),
     )
@@ -327,7 +327,7 @@ def _needs_fields(variant) -> bool:
 
 # ── Покупка топапа: сбор данных игрока (fields) ──────────────────────────────
 async def _start_topup(call, config, fzr, state, variant) -> None:
-    price = sale_price(variant, config.default_markup_percent)
+    price = price_rub_value(variant, config.default_markup_percent)
     note = None
     if variant.fzr_a in ("telegram_stars", "telegram_premium"):
         # Telegram Stars/Premium: нужен только @username получателя.
@@ -344,9 +344,9 @@ async def _start_topup(call, config, fzr, state, variant) -> None:
     await state.set_state(BuyFlow.collecting)
     await state.update_data(
         vid=variant.id, fields=fields, idx=0, answers={},
-        price_str=texts.money(price, config.currency), title=variant.title,
+        price_str=texts.rub(price), title=variant.title,
     )
-    intro = f"🧩 <b>{variant.title}</b>\nЦена: <b>{texts.money(price, config.currency)}</b>"
+    intro = f"🧩 <b>{variant.title}</b>\nЦена: <b>{texts.rub(price)}</b>"
     if note:
         intro += f"\n\nℹ️ {note}"
     await call.message.answer(intro)
@@ -449,7 +449,7 @@ async def cb_topup_confirm(
             await state.clear()
             await call.answer("Недоступно", show_alert=True)
             return
-        unit_price = sale_price(variant, config.default_markup_percent)
+        unit_price = price_rub_value(variant, config.default_markup_percent)
         await order_service.ensure_user(
             session, call.from_user.id, call.from_user.username, call.from_user.full_name
         )
@@ -504,8 +504,8 @@ async def cb_topup_confirm(
         )
 
     await state.clear()
-    bal_str = texts.money(balance, config.currency)
-    total_str = texts.money(total, config.currency)
+    bal_str = texts.rub(balance)
+    total_str = texts.rub(total)
     done_kb = kb.order_done_kb(order_id, vid)
     if status == OrderStatus.COMPLETED and codes:
         codes_text = "\n".join(f"<code>{c}</code>" for c in codes)
@@ -543,7 +543,7 @@ async def cb_confirm(
         if not variant or not variant.is_active:
             await call.answer("Недоступно", show_alert=True)
             return
-        unit_price = sale_price(variant, config.default_markup_percent)
+        unit_price = price_rub_value(variant, config.default_markup_percent)
         await order_service.ensure_user(
             session,
             user_id=call.from_user.id,
@@ -615,8 +615,8 @@ async def cb_confirm(
             caption=texts.PURCHASE_PENDING.format(
                 item=item_name,
                 qty=qty,
-                total=texts.money(total, config.currency),
-                balance=texts.money(balance, config.currency),
+                total=texts.rub(total),
+                balance=texts.rub(balance),
                 note=note,
             ),
             reply_markup=kb.after_purchase_kb(),
@@ -631,8 +631,8 @@ async def cb_confirm(
         caption=texts.PURCHASE_SUCCESS.format(
             item=item_name,
             qty=qty,
-            total=texts.money(total, config.currency),
-            balance=texts.money(balance, config.currency),
+            total=texts.rub(total),
+            balance=texts.rub(balance),
             codes=codes_text,
         ),
         reply_markup=kb.order_done_kb(order_id, variant_id),

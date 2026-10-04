@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Order, OrderStatus, User, Variant
+from . import rates as rates_service
 
 
 def day_bounds(d: datetime) -> Tuple[datetime, datetime]:
@@ -69,13 +70,18 @@ async def sales_stats(
             .where(*conds)
         )
     ).one()
-    orders, items, revenue, cost = row
+    orders, items, revenue, cost_usd = row
+    # Выручка (списанное с клиентов) уже в рублях. Себестоимость — в USDT,
+    # переводим в рубли по текущему курсу для расчёта прибыли.
     revenue = Decimal(revenue or 0)
-    cost = Decimal(cost or 0)
+    cost_usd = Decimal(cost_usd or 0)
+    rate = rates_service.get_rate()
+    cost_rub = (cost_usd * rate)
     return {
         "orders": int(orders or 0),
         "items": int(items or 0),
-        "revenue": revenue,
-        "cost": cost,
-        "profit": revenue - cost,
+        "revenue": revenue,          # ₽
+        "cost": cost_rub,            # ₽ (себестоимость по курсу)
+        "cost_usd": cost_usd,        # USDT (справочно)
+        "profit": revenue - cost_rub,  # ₽
     }

@@ -37,8 +37,8 @@ async def _referral_screen(call: CallbackQuery, db: Database, config: BotConfig)
             return
         st = await referral_service.stats(session, call.from_user.id)
         terms = await referral_service.terms_text(session)
-        min_raw = await settings_service.get(session, settings_service.REF_MIN_WD_USDT)
-        min_usdt = Decimal(min_raw) if min_raw else referral_service.DEFAULT_MIN_USDT
+        min_raw = await settings_service.get(session, settings_service.REF_MIN_WD_RUB)
+        min_rub = Decimal(min_raw) if min_raw else referral_service.DEFAULT_MIN_RUB
 
     me = await call.message.bot.get_me()
     link = referral_service.ref_link(me.username, call.from_user.id)
@@ -54,17 +54,14 @@ async def _referral_screen(call: CallbackQuery, db: Database, config: BotConfig)
         f"Приглашено: <b>{st['invited']}</b>",
         f"Из них с покупками: <b>{st['with_purchase']}</b>",
         "",
-        f"💵 Реферальный баланс: <b>{texts.money(st['bal_usdt'])}</b>",
-        f"Заработано всего: <b>{texts.money(st['earned_usdt'])}</b>",
+        f"💰 Реферальный баланс: <b>{texts.rub(st['bal_rub'])}</b>",
+        f"Заработано всего: <b>{texts.rub(st['earned_rub'])}</b>",
     ]
-    # Рублёвые строки показываем только когда там что-то есть (этап с ₽).
-    if st["bal_rub"] > 0 or st["earned_rub"] > 0:
-        lines.append(f"💴 Реф. баланс ₽: <b>{st['bal_rub']} ₽</b> (заработано {st['earned_rub']} ₽)")
 
-    can_transfer = st["bal_usdt"] >= min_usdt and st["bal_usdt"] > 0
+    can_transfer = st["bal_rub"] >= min_rub and st["bal_rub"] > 0
     if not can_transfer:
         lines.append("")
-        lines.append(f"ℹ️ Перевод на основной баланс — от {texts.money(min_usdt)}.")
+        lines.append(f"ℹ️ Перевод на основной баланс — от {texts.rub(min_rub)}.")
 
     await render(
         call, banner="main", caption="\n".join(lines),
@@ -83,13 +80,13 @@ async def cb_ref(call: CallbackQuery, db: Database, config: BotConfig, state: FS
 async def cb_ref_transfer(call: CallbackQuery, db: Database, config: BotConfig) -> None:
     async with db.session() as session:
         ok, amount, need = await referral_service.transfer_to_balance(
-            session, call.from_user.id, "USDT"
+            session, call.from_user.id, "RUB"
         )
         await session.commit()
     if not ok:
         await call.answer(
-            f"Недостаточно для перевода. Минимум {texts.money(need)}.", show_alert=True
+            f"Недостаточно для перевода. Минимум {texts.rub(need)}.", show_alert=True
         )
         return
-    await call.answer(f"Переведено {texts.money(amount)} на основной баланс ✅", show_alert=True)
+    await call.answer(f"Переведено {texts.rub(amount)} на основной баланс ✅", show_alert=True)
     await _referral_screen(call, db, config)

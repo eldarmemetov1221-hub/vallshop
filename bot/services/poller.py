@@ -122,7 +122,7 @@ async def _tick(
             await session.commit()
 
         admin_ids = list(config.admin_ids) if config else []
-        amount_str = texts.money(refund_amount)
+        amount_str = texts.rub(refund_amount)
         done_kb = kb.order_done_kb(order_id, variant_id)
         if status == OrderStatus.COMPLETED and code:
             await _notify(
@@ -212,7 +212,7 @@ async def _topup_tick(bot: Bot, db: Database, provider) -> None:
         await _notify(
             bot, user_id,
             texts.TOPUP_SUCCESS.format(
-                credit=texts.money(credit), balance=texts.money(balance)
+                credit=texts.rub(credit), balance=texts.rub(balance)
             ),
         )
 

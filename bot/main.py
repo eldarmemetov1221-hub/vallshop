@@ -38,6 +38,37 @@ async def _run_web(config: BotConfig, bot, db, provider, liog) -> None:
     log.info("Webhook-сервер слушает :%s (notifyUrl=%s)", port, config.notify_url)
 
 
+async def _migrate_to_rub(db: Database, rate) -> None:
+    """Разовая конвертация балансов USDT→₽ при переходе на рубли.
+
+    Умножает балансы и реф-начисления на курс. Реф-баланс USDT переносится
+    в реф-баланс ₽. Защищено флагом в settings — выполняется один раз.
+    """
+    from decimal import Decimal
+    from sqlalchemy import update
+    from .db.models import Order, User
+    from .services import settings as settings_service
+
+    async with db.session() as session:
+        done = await settings_service.get(session, "rub_migrated")
+        if done:
+            return
+        r = Decimal(rate)
+        # Балансы пользователей и реф-балансы → рубли.
+        await session.execute(update(User).values(
+            balance=User.balance * r,
+            ref_balance_rub=User.ref_balance_rub + User.ref_balance_usdt * r,
+            ref_earned_rub=User.ref_earned_rub + User.ref_earned_usdt * r,
+            ref_balance_usdt=Decimal(0),
+            ref_earned_usdt=Decimal(0),
+        ))
+        # Суммы заказов (списанное) → рубли, чтобы история/статистика были в ₽.
+        await session.execute(update(Order).values(price_usd=Order.price_usd * r))
+        await settings_service.set(session, "rub_migrated", "1")
+        await session.commit()
+    log.info("Балансы сконвертированы в рубли по курсу %s", rate)
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -49,7 +80,10 @@ async def main() -> None:
     await db.create_all()
 
     from .services import menu as menu_service
+    from .services import rates as rates_service
     await menu_service.load(db)  # кэш оформления меню
+    await rates_service.load(db)  # курс USDT→₽
+    await _migrate_to_rub(db, rates_service.get_rate())  # разовая конвертация балансов
 
     provider = build_provider(config)
     liog = LioGamesClient.from_env()
