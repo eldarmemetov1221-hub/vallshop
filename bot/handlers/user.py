@@ -451,14 +451,11 @@ async def cb_topup_confirm(
             )
         except InsufficientBalance:
             await session.rollback()
-            bal = await get_balance(session, call.from_user.id)
-            await call.answer(
-                texts.NOT_ENOUGH_BALANCE.format(
-                    total=texts.money(unit_price, config.currency),
-                    balance=texts.money(bal, config.currency),
-                ),
-                show_alert=True,
+            await state.clear()
+            await call.message.answer(
+                texts.NOT_ENOUGH_BALANCE_MSG, reply_markup=kb.not_enough_balance_kb()
             )
+            await call.answer()
             return
         except SupplierError:
             await session.rollback()
@@ -554,14 +551,10 @@ async def cb_confirm(
             )
         except InsufficientBalance:
             await session.rollback()
-            balance = await get_balance(session, call.from_user.id)
-            await call.answer(
-                texts.NOT_ENOUGH_BALANCE.format(
-                    total=texts.money(unit_price * qty, config.currency),
-                    balance=texts.money(balance, config.currency),
-                ),
-                show_alert=True,
+            await call.message.answer(
+                texts.NOT_ENOUGH_BALANCE_MSG, reply_markup=kb.not_enough_balance_kb()
             )
+            await call.answer()
             return
         except OutOfStock:
             await session.rollback()

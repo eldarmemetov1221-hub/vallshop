@@ -156,6 +156,13 @@ def buy_kb(variant_id: int, back: str = "catalog") -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def not_enough_balance_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(_b("Пополнить баланс", callback_data="topup", style="success", icon=EMOJI["topup"]))
+    kb.row(_b("Назад", callback_data="menu", icon=EMOJI["back"]))
+    return kb.as_markup()
+
+
 def after_purchase_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(_b("Каталог", callback_data="catalog", style="primary", icon=EMOJI["catalog"]))

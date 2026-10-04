@@ -101,9 +101,28 @@ async def cb_balance(
     await call.answer()
 
 
-# ── Пополнение ─────────────────────────────────────────────────────────────
+# ── Пополнение (сначала сеть, затем сумма) ───────────────────────────────────
 @router.callback_query(F.data == "topup")
-async def cb_topup(call: CallbackQuery, state: FSMContext) -> None:
+async def cb_topup(call: CallbackQuery, config: BotConfig, state: FSMContext) -> None:
+    await state.set_state(TopUpFlow.waiting_network)
+    await render(
+        call,
+        banner="profile",
+        caption=texts.TOPUP_CHOOSE_METHOD,
+        reply_markup=kb.topup_networks_kb(config.networks),
+    )
+    await call.answer()
+
+
+@router.callback_query(TopUpFlow.waiting_network, F.data.startswith("tunet:"))
+async def cb_topup_network(
+    call: CallbackQuery, config: BotConfig, state: FSMContext
+) -> None:
+    net = call.data.split(":", 1)[1].upper()
+    if net not in config.networks:
+        await call.answer("Сеть недоступна", show_alert=True)
+        return
+    await state.update_data(net=net)
     await state.set_state(TopUpFlow.waiting_amount)
     await render(
         call,
@@ -116,7 +135,11 @@ async def cb_topup(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(TopUpFlow.waiting_amount)
 async def msg_topup_amount(
-    message: Message, config: BotConfig, state: FSMContext
+    message: Message,
+    db: Database,
+    config: BotConfig,
+    provider: PaymentProvider,
+    state: FSMContext,
 ) -> None:
     raw = (message.text or "").strip().replace(",", ".")
     try:
@@ -128,56 +151,34 @@ async def msg_topup_amount(
         await message.answer(texts.TOPUP_BAD_AMOUNT.format(min=TOPUP_MIN, max=TOPUP_MAX))
         return
 
-    await state.update_data(amount=str(amount))
-    await state.set_state(TopUpFlow.waiting_network)
-    await render(
-        message,
-        banner="profile",
-        caption=texts.TOPUP_CHOOSE_NETWORK.format(amount=texts.money(amount, config.currency)),
-        reply_markup=kb.topup_networks_kb(config.networks),
-    )
-
-
-@router.callback_query(TopUpFlow.waiting_network, F.data.startswith("tunet:"))
-async def cb_topup_network(
-    call: CallbackQuery,
-    db: Database,
-    config: BotConfig,
-    provider: PaymentProvider,
-    state: FSMContext,
-) -> None:
-    net = call.data.split(":", 1)[1].upper()
-    if net not in config.networks:
-        await call.answer("Сеть недоступна", show_alert=True)
-        return
     data = await state.get_data()
-    amount = Decimal(data.get("amount", "0"))
-    await state.clear()
-    if amount < TOPUP_MIN:
-        await call.answer("Сумма не задана, начните заново", show_alert=True)
+    net = (data.get("net") or "").upper()
+    if net not in config.networks:
+        await state.clear()
+        await message.answer("Сеть не выбрана, начните пополнение заново.")
         return
+    await state.clear()
 
     async with db.session() as session:
         await order_service.ensure_user(
-            session, call.from_user.id, call.from_user.username, call.from_user.full_name
+            session, message.from_user.id, message.from_user.username, message.from_user.full_name
         )
         topup = await balance_service.create_topup(
-            session, user_id=call.from_user.id, amount_usd=amount
+            session, user_id=message.from_user.id, amount_usd=amount
         )
         try:
             invoice = await provider.create_invoice(
                 amount=amount,
                 client_ref=topup.client_ref,
-                description=f"Balance top-up {call.from_user.id}",
+                description=f"Balance top-up {message.from_user.id}",
                 notify_url=config.notify_url,
                 success_url=config.public_base_url,
                 network=net,
             )
         except Exception:  # noqa: BLE001
             await session.rollback()
-            await call.answer(
-                "Не удалось создать счёт. Попробуйте другую сеть или позже.",
-                show_alert=True,
+            await message.answer(
+                "Не удалось создать счёт. Попробуйте другую сеть или позже."
             )
             raise
 
@@ -193,7 +194,7 @@ async def cb_topup_network(
         topup_id = topup.id
 
     await render(
-        call,
+        message,
         banner="profile",
         caption=texts.TOPUP_CREATED.format(
             credit=texts.money(amount, config.currency),
@@ -203,7 +204,6 @@ async def cb_topup_network(
         ),
         reply_markup=kb.topup_payment_kb(topup_id, invoice.checkout_url, invoice.address),
     )
-    await call.answer()
 
 
 @router.callback_query(F.data.startswith("tucheck:"))
