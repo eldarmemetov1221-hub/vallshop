@@ -62,6 +62,7 @@ class Database:
             ("products", "delivered_text", "TEXT"),
             ("variants", "pending_text", "TEXT"),
             ("variants", "delivered_text", "TEXT"),
+            ("products", "banner_file_id", "VARCHAR(255)"),
         ]
         added_source = False
         for table, column, ddl in wanted:

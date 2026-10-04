@@ -65,6 +65,7 @@ class AdminUI(StatesGroup):
     set_var_title = State()
     set_price_rub = State()
     set_text = State()
+    set_banner = State()
     fzr_search = State()
     fzr_price = State()
 
@@ -179,10 +180,12 @@ async def _product_card(session, config: BotConfig, product_id: int):
     flag = "🟢 активен" if product.is_active else "🔴 выключен"
     desc = product.description or "— (нет описания)"
     kind = "📁 категория" if children else "📦 товар"
+    banner = "🖼 есть" if product.banner_file_id else "— нет"
     caption = (
         f"{kind}: <b>{product.title}</b>\n"
         f"Игра: {product.game} · {flag}\n"
         f"Описание: {desc}\n"
+        f"Баннер: {banner}\n"
         f"Подкатегорий: {len(children)} · Номиналов: {len(variants)}"
     )
     kb = InlineKeyboardBuilder()
@@ -210,8 +213,9 @@ async def _product_card(session, config: BotConfig, product_id: int):
     kb.row(_btn("➕ Номинал FazerCard", f"a_addvarf:{product_id}"))
     kb.row(
         _btn("🙂 Эмодзи", f"a_pemoji:{product_id}"),
-        _btn("🔁 Вкл/выкл товар", f"a_tprod:{product_id}"),
+        _btn("🖼 Баннер", f"a_pbanner:{product_id}"),
     )
+    kb.row(_btn("🔁 Вкл/выкл товар", f"a_tprod:{product_id}"))
     kb.row(
         _btn("⏳ Текст ожидания", f"a_txt:p:pend:{product_id}"),
         _btn("✅ Текст выдачи", f"a_txt:p:deliv:{product_id}"),
@@ -703,6 +707,60 @@ async def msg_prod_desc(message: Message, db: Database, state: FSMContext) -> No
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
     await message.answer("✅ Описание обновлено", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_pbanner:"))
+async def cb_prod_banner(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        p = await session.get(Product, pid)
+        has = bool(p and p.banner_file_id)
+    cur = "сейчас: 🖼 установлен\n\n" if has else "сейчас: — нет\n\n"
+    await state.set_state(AdminUI.set_banner)
+    await state.update_data(pid=pid)
+    await call.message.edit_text(
+        "🖼 <b>Баннер категории</b> (картинка над списком при входе в категорию).\n"
+        f"{cur}"
+        "Пришлите <b>фото</b> — оно станет баннером этой категории.\n"
+        "<code>-</code> — убрать (вернуть общий баннер «Каталог»).",
+        reply_markup=_cancel_kb(f"a_prod:{pid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_banner, F.photo)
+async def msg_prod_banner_photo(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    pid = data.get("pid")
+    file_id = message.photo[-1].file_id  # самое большое доступное разрешение
+    async with db.session() as session:
+        p = await session.get(Product, pid)
+        if p:
+            p.banner_file_id = file_id
+            await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
+    await message.answer("✅ Баннер категории обновлён", reply_markup=kb.as_markup())
+
+
+@router.message(AdminUI.set_banner)
+async def msg_prod_banner_text(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    pid = data.get("pid")
+    raw = (message.text or "").strip()
+    if raw != "-":
+        await message.answer("Пришлите фото или <code>-</code>, чтобы убрать баннер.")
+        return
+    async with db.session() as session:
+        p = await session.get(Product, pid)
+        if p:
+            p.banner_file_id = None
+            await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К товару", f"a_prod:{pid}"))
+    await message.answer("✅ Баннер убран (общий «Каталог»)", reply_markup=kb.as_markup())
 
 
 @router.callback_query(F.data.startswith("a_addvarm:"))

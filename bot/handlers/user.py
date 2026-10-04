@@ -144,13 +144,18 @@ async def cb_product(
         # Куда вести кнопку «Назад»: к родительской категории или в каталог.
         back = f"prod:{parent_id}" if parent_id else "catalog"
 
+        banner_photo = product.banner_file_id or None
+
         if children:
             caption = f"{prod_emoji} <b>{product.title}</b>"
             if product.description:
                 caption += f"\n\n{product.description}"
             caption += "\n\nВыберите категорию:"
             markup = kb.products_kb(children, back=back, back_text="Назад")
-            await render(call, banner="catalog", caption=caption, reply_markup=markup)
+            await render(
+                call, banner="catalog", caption=caption,
+                reply_markup=markup, photo=banner_photo,
+            )
             await call.answer()
             return
 
@@ -178,6 +183,7 @@ async def cb_product(
             variants, prices, stock, config.currency,
             product_icon=product.icon_emoji_id, back=back,
         ),
+        photo=banner_photo,
     )
     await call.answer()
 

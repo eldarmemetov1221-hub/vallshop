@@ -41,7 +41,12 @@ def _clip(caption: str) -> str:
     return caption if len(caption) <= CAPTION_LIMIT else caption[: CAPTION_LIMIT - 1] + "…"
 
 
-def _media_source(banner: str) -> Union[str, FSInputFile]:
+def _media_source(
+    banner: str, override: Optional[str] = None
+) -> Union[str, FSInputFile]:
+    # Прямой file_id (например, баннер категории) — используем как есть.
+    if override:
+        return override
     if banner in _file_ids:
         return _file_ids[banner]
     return FSInputFile(str(BANNERS[banner]))
@@ -61,17 +66,23 @@ async def render(
     banner: str,
     caption: str,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
+    photo: Optional[str] = None,
 ) -> None:
     """Показать экран с баннером. Для callback — редактирует сообщение,
-    для message — отправляет новое фото."""
+    для message — отправляет новое фото.
+
+    ``photo`` — прямой Telegram file_id (например, свой баннер категории);
+    если задан, используется вместо стандартного баннера ``banner``."""
     caption = _clip(caption)
 
     if isinstance(event, CallbackQuery):
         msg = event.message
-        media = InputMediaPhoto(media=_media_source(banner), caption=caption, parse_mode="HTML")
+        media = InputMediaPhoto(
+            media=_media_source(banner, photo), caption=caption, parse_mode="HTML"
+        )
         try:
             edited = await msg.edit_media(media, reply_markup=reply_markup)
-            if isinstance(edited, Message):
+            if isinstance(edited, Message) and not photo:
                 _remember(banner, edited)
             return
         except TelegramBadRequest as exc:
@@ -86,6 +97,7 @@ async def render(
 
     target = event.message if isinstance(event, CallbackQuery) else event
     sent = await target.answer_photo(
-        _media_source(banner), caption=caption, reply_markup=reply_markup
+        _media_source(banner, photo), caption=caption, reply_markup=reply_markup
     )
-    _remember(banner, sent)
+    if not photo:
+        _remember(banner, sent)

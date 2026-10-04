@@ -95,6 +95,8 @@ class Product(Base):
     )
     # Кастом-эмодзи (custom_emoji_id) для иконки кнопки товара.
     icon_emoji_id: Mapped[Optional[str]] = mapped_column(String(32))
+    # Своя картинка-баннер категории (Telegram file_id). None — общий баннер.
+    banner_file_id: Mapped[Optional[str]] = mapped_column(String(255))
     # Настраиваемые тексты (наследуются номиналами). None = наследовать/дефолт,
     # "" = скрыть. pending_text — строка «оформляем…», delivered_text — сообщение
     # об успешной выдаче на аккаунт (без кода).
