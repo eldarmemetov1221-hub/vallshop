@@ -1139,7 +1139,8 @@ async def cb_set_text(call: CallbackQuery, db: Database, state: FSMContext) -> N
     await state.update_data(txt_kind=kind, txt_field=field, txt_id=obj_id)
     await call.message.edit_text(
         f"✏️ Редактирование: <b>{_TXT_LABEL[fkey]}</b>\n{cur_line}\n\n"
-        "Пришлите новый текст.\n"
+        "Пришлите новый текст. Можно с премиум-эмодзи и форматированием "
+        "(жирный, курсив) — они сохранятся.\n"
         "<code>0</code> — сбросить (наследовать с уровня выше или дефолт).\n"
         "<code>-</code> — скрыть (ничего не отправлять покупателю).",
         reply_markup=_cancel_kb(back),
@@ -1162,7 +1163,8 @@ async def msg_set_text(message: Message, db: Database, state: FSMContext) -> Non
     elif raw == "-":
         value, note = "", "скрыт — покупателю ничего не отправляется"
     else:
-        value, note = raw, "обновлён"
+        # html_text сохраняет премиум-эмодзи (custom_emoji) и форматирование.
+        value, note = (message.html_text or message.text).strip(), "обновлён"
     back = f"a_var:{obj_id}" if kind == "v" else f"a_prod:{obj_id}"
     async with db.session() as session:
         obj = await session.get(Variant if kind == "v" else Product, obj_id)
