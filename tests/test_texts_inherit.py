@@ -90,3 +90,27 @@ async def test_variant_empty_hides_over_product(db):
     async with db.session() as s:
         v = await s.get(Variant, vid)
         assert await catalog_service.resolve_text(s, v, "pending_text", DEFAULT) == ""
+
+
+@pytest.mark.asyncio
+async def test_resolve_for_product_inherits_and_defaults(db):
+    async with db.session() as s:
+        parent = Product(game="PUBG", title="PUBG UC", pending_text="от категории")
+        s.add(parent)
+        await s.flush()
+        child = Product(game="PUBG", title="Global", parent_id=parent.id)
+        own = Product(game="PUBG", title="RU", parent_id=parent.id, pending_text="своё")
+        s.add_all([child, own])
+        await s.commit()
+        pid_parent, pid_child, pid_own = parent.id, child.id, own.id
+
+    async with db.session() as s:
+        p_parent = await s.get(Product, pid_parent)
+        p_child = await s.get(Product, pid_child)
+        p_own = await s.get(Product, pid_own)
+        r = catalog_service.resolve_text_for_product
+        assert await r(s, p_parent, "pending_text", DEFAULT) == "от категории"
+        assert await r(s, p_child, "pending_text", DEFAULT) == "от категории"  # от родителя
+        assert await r(s, p_own, "pending_text", DEFAULT) == "своё"
+        # delivered_text нигде не задан → дефолт
+        assert await r(s, p_child, "delivered_text", DEFAULT) == DEFAULT

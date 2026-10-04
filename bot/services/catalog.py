@@ -133,6 +133,26 @@ async def resolve_text(
     return default
 
 
+async def resolve_text_for_product(
+    session: AsyncSession, product: Product, field: str, default: str
+) -> str:
+    """То же наследование, но начиная с товара: товар → родитель → дефолт.
+
+    Используется в админке, чтобы показать действующий текст на уровне
+    категории/подкатегории (без конкретного номинала).
+    """
+    pv = getattr(product, field, None)
+    if pv is not None:
+        return pv
+    if product.parent_id:
+        parent = await session.get(Product, product.parent_id)
+        if parent is not None:
+            ppv = getattr(parent, field, None)
+            if ppv is not None:
+                return ppv
+    return default
+
+
 async def get_variant(session: AsyncSession, variant_id: int) -> Optional[Variant]:
     # Жадно подгружаем product, чтобы обращение к variant.product не вызывало
     # ленивую загрузку в async-контексте (SQLAlchemy async её не допускает).

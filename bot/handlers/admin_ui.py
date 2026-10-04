@@ -877,18 +877,29 @@ async def cb_set_text(call: CallbackQuery, db: Database, state: FSMContext) -> N
         await call.answer("Неизвестно", show_alert=True)
         return
     back = f"a_var:{obj_id}" if kind == "v" else f"a_prod:{obj_id}"
+    default = _txt_default(field)
     async with db.session() as session:
         obj = await session.get(Variant if kind == "v" else Product, obj_id)
         if not obj:
             await call.answer("Не найдено", show_alert=True)
             return
-        cur = getattr(obj, field, None)
-    if cur is None:
-        cur_line = "сейчас: <i>наследуется / по умолчанию</i>"
-    elif cur == "":
-        cur_line = "сейчас: <i>скрыт (ничего не отправляется)</i>"
+        own = getattr(obj, field, None)  # значение именно на этом уровне
+        # Текст, который реально действует сейчас (с учётом наследования).
+        if kind == "v":
+            effective = await catalog_service.resolve_text(session, obj, field, default)
+        else:
+            effective = await catalog_service.resolve_text_for_product(
+                session, obj, field, default
+            )
+    # Откуда берётся действующий текст.
+    if own is not None:
+        origin = "" if own != "" else " (скрыт на этом уровне)"
     else:
-        cur_line = f"сейчас:\n<blockquote>{cur}</blockquote>"
+        origin = " (наследуется / по умолчанию)"
+    if effective == "":
+        cur_line = f"сейчас: <i>ничего не отправляется{origin}</i>"
+    else:
+        cur_line = f"сейчас{origin}:\n<blockquote>{effective}</blockquote>"
     await state.set_state(AdminUI.set_text)
     await state.update_data(txt_kind=kind, txt_field=field, txt_id=obj_id)
     await call.message.edit_text(
