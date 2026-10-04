@@ -50,6 +50,9 @@ EMOJI = {
     "privacy": "5935757052042285202",    # политика конфиденциальности
     "support": "6021618194228187816",    # техподдержка
     "activate": "5422711448914647622",   # активировать код
+    "review_leave": "6028338546736107668",  # оставить отзыв
+    "buy_more": "6028205772117118673",      # купить ещё
+    "reviews": "5890925363067886150",       # отзывы
 }
 
 SUPPORT_URL = "https://t.me/vallmanager"
@@ -74,7 +77,10 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
         _b("Мой профиль", callback_data="profile", style="success", icon=EMOJI["profile"]),
     )
     kb.row(_b("Активировать Код", callback_data="activate", style="primary", icon=EMOJI["activate"]))
-    kb.row(_b("FAQ / Правила", callback_data="faq", style="danger", icon=EMOJI["faq"]))
+    kb.row(
+        _b("FAQ / Правила", callback_data="faq", style="danger", icon=EMOJI["faq"]),
+        _b("Отзывы", callback_data="reviews", style="primary", icon=EMOJI["reviews"]),
+    )
     if is_admin:
         kb.row(_b("Админ-панель", callback_data="admin", style="danger", icon=EMOJI["admin"]))
     return kb.as_markup()
@@ -170,6 +176,27 @@ def after_purchase_kb() -> InlineKeyboardMarkup:
         _b("Профиль", callback_data="profile", style="success", icon=EMOJI["profile"]),
         _b("Меню", callback_data="menu", icon=EMOJI["back"]),
     )
+    return kb.as_markup()
+
+
+def order_done_kb(order_id: int, variant_id: int) -> InlineKeyboardMarkup:
+    """Кнопки под сообщением о выполненном заказе."""
+    kb = InlineKeyboardBuilder()
+    kb.row(_b("Оставить отзыв", callback_data=f"review:{order_id}",
+             style="success", icon=EMOJI["review_leave"]))
+    kb.row(_b("Купить ещё", callback_data=f"var:{variant_id}",
+             style="primary", icon=EMOJI["buy_more"]))
+    kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))
+    return kb.as_markup()
+
+
+def review_rating_kb(order_id: int) -> InlineKeyboardMarkup:
+    """Выбор оценки 1–5 в один ряд + Меню."""
+    kb = InlineKeyboardBuilder()
+    for n in (1, 2, 3, 4, 5):
+        kb.button(text=str(n), callback_data=f"rate:{order_id}:{n}")
+    kb.adjust(5)
+    kb.row(_b("Меню", callback_data="menu", style="danger", icon=EMOJI["back"]))
     return kb.as_markup()
 
 

@@ -7,6 +7,7 @@ from .models import (
     Payment,
     PaymentStatus,
     Product,
+    Review,
     Setting,
     StockItem,
     StockStatus,
@@ -31,4 +32,5 @@ __all__ = [
     "Payment",
     "PaymentStatus",
     "Setting",
+    "Review",
 ]

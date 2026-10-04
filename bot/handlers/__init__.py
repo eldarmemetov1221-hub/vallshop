@@ -7,9 +7,11 @@ from . import (
     admin,
     admin_codes,
     admin_orders,
+    admin_reviews,
     admin_stats,
     admin_ui,
     profile,
+    reviews,
     user,
 )
 
@@ -20,8 +22,10 @@ def build_root_router() -> Router:
     root.include_router(admin_ui.router)
     root.include_router(admin_codes.router)
     root.include_router(admin_orders.router)
+    root.include_router(admin_reviews.router)
     root.include_router(admin_stats.router)
     root.include_router(activation.router)
+    root.include_router(reviews.router)
     root.include_router(profile.router)
     root.include_router(user.router)
     return root

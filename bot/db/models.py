@@ -312,6 +312,25 @@ class Setting(Base):
     value: Mapped[Optional[str]] = mapped_column(Text)
 
 
+class Review(Base):
+    """Отзыв покупателя о выполненном заказе."""
+
+    __tablename__ = "reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    username: Mapped[Optional[str]] = mapped_column(String(64))
+    variant_id: Mapped[Optional[int]] = mapped_column(Integer)
+    product_title: Mapped[Optional[str]] = mapped_column(String(255))
+    amount_usd: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    rating: Mapped[int] = mapped_column(Integer, default=5)
+    text: Mapped[Optional[str]] = mapped_column(Text)
+    # "new" (ждёт модерации) | "published"
+    status: Mapped[str] = mapped_column(String(16), default="new")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class TopUpStatus(str, enum.Enum):
     PENDING = "pending"
     PAID = "paid"

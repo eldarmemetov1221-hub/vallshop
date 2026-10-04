@@ -497,19 +497,20 @@ async def cb_topup_confirm(
     await state.clear()
     bal_str = texts.money(balance, config.currency)
     total_str = texts.money(total, config.currency)
+    done_kb = kb.order_done_kb(order_id, vid)
     if status == OrderStatus.COMPLETED and codes:
         codes_text = "\n".join(f"<code>{c}</code>" for c in codes)
         await call.message.answer(
             texts.PURCHASE_SUCCESS.format(
                 item=item_name, qty=1, total=total_str, balance=bal_str, codes=codes_text
             ),
-            reply_markup=kb.after_purchase_kb(),
+            reply_markup=done_kb,
         )
     elif status == OrderStatus.COMPLETED:
         if delivered_text:
-            await call.message.answer(delivered_text, reply_markup=kb.after_purchase_kb())
+            await call.message.answer(delivered_text, reply_markup=done_kb)
         else:
-            await call.message.answer("✅ Заказ выполнен!", reply_markup=kb.after_purchase_kb())
+            await call.message.answer("✅ Заказ выполнен!", reply_markup=done_kb)
     else:  # FULFILLING
         note = f"\n\n{pending_note}" if pending_note else ""
         await call.message.answer(
@@ -625,6 +626,6 @@ async def cb_confirm(
             balance=texts.money(balance, config.currency),
             codes=codes_text,
         ),
-        reply_markup=kb.after_purchase_kb(),
+        reply_markup=kb.order_done_kb(order_id, variant_id),
     )
     await call.answer("Готово ✅")

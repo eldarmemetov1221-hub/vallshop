@@ -26,6 +26,7 @@ from ..services import catalog as catalog_service
 from ..services import notify as notify_service
 from ..services import orders as order_service
 from ..services import settings as settings_service
+from .. import keyboards as kb
 from .. import texts
 
 log = logging.getLogger("vallshop.poller")
@@ -104,6 +105,7 @@ async def _tick(
             code = fresh.delivery_code
             ref = fresh.client_ref
             order_id = fresh.id
+            variant_id = fresh.variant_id
             reason = fresh.fail_reason or "—"
             refund_amount = Decimal(fresh.price_usd) * (fresh.quantity or 1)
             delivered_text = texts.TOPUP_ACCOUNT_DELIVERED
@@ -119,12 +121,15 @@ async def _tick(
 
         admin_ids = list(config.admin_ids) if config else []
         amount_str = texts.money(refund_amount)
+        done_kb = kb.order_done_kb(order_id, variant_id)
         if status == OrderStatus.COMPLETED and code:
-            await _notify(bot, user_id, texts.DELIVERY_SUCCESS.format(code=code))
+            await _notify(
+                bot, user_id, texts.DELIVERY_SUCCESS.format(code=code), done_kb
+            )
         elif status == OrderStatus.COMPLETED:
             # Доставка на аккаунт/username без кода (топап/Telegram) — настраиваемый текст.
             if delivered_text:
-                await _notify(bot, user_id, delivered_text)
+                await _notify(bot, user_id, delivered_text, done_kb)
         elif status == OrderStatus.REFUNDED and refunded:
             await _notify(
                 bot, user_id,
@@ -210,8 +215,8 @@ async def _topup_tick(bot: Bot, db: Database, provider) -> None:
         )
 
 
-async def _notify(bot: Bot, user_id: int, text: str) -> None:
+async def _notify(bot: Bot, user_id: int, text: str, reply_markup=None) -> None:
     try:
-        await bot.send_message(user_id, text)
+        await bot.send_message(user_id, text, reply_markup=reply_markup)
     except Exception:  # noqa: BLE001
         log.warning("Не удалось отправить сообщение user=%s", user_id)
