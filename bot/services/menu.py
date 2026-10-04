@@ -197,6 +197,17 @@ async def move(db: Database, key: str, direction: int) -> None:
     await load(db)
 
 
+async def reset_all(db: Database) -> None:
+    """Сбросить всё оформление к значениям по умолчанию (реестр)."""
+    from sqlalchemy import delete as sa_delete
+    async with db.session() as session:
+        await session.execute(sa_delete(MenuButton))
+        for skey in set(MENU_CAPTION.values()):
+            await settings_service.set(session, skey, None)
+        await session.commit()
+    await load(db)
+
+
 async def set_caption(db: Database, menu: str, text: Optional[str]) -> None:
     skey = MENU_CAPTION.get(menu)
     if not skey:

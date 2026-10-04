@@ -51,6 +51,7 @@ async def cb_home(call: CallbackQuery, state: FSMContext) -> None:
     kb = InlineKeyboardBuilder()
     for m, title in menu_service.MENU_TITLES.items():
         kb.row(_btn(f"📋 {title}", f"ap_menu:{m}"))
+    kb.row(_btn("♻️ Сбросить к стандартному", "ap_reset"))
     kb.row(_btn("⬅️ Назад", "a_home"))
     await call.message.edit_text(
         "🎨 <b>Оформление</b>\n\n"
@@ -60,6 +61,28 @@ async def cb_home(call: CallbackQuery, state: FSMContext) -> None:
         reply_markup=kb.as_markup(),
     )
     await call.answer()
+
+
+@router.callback_query(F.data == "ap_reset")
+async def cb_reset_ask(call: CallbackQuery) -> None:
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("♻️ Да, сбросить", "ap_reset_ok"))
+    kb.row(_btn("⬅️ Отмена", "ap_home"))
+    await call.message.edit_text(
+        "♻️ Сбросить <b>всё оформление</b> к стандартному?\n"
+        "Тексты кнопок, эмодзи, порядок и тексты экранов вернутся к значениям "
+        "по умолчанию. Скрытые кнопки снова станут видимыми.",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "ap_reset_ok")
+async def cb_reset(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    await menu_service.reset_all(db)
+    await state.clear()
+    await cb_home(call, state)
+    await call.answer("Сброшено ✅")
 
 
 @router.callback_query(F.data.startswith("ap_menu:"))
