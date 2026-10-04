@@ -35,6 +35,9 @@ router.message.filter(IsAdminMsg())
 
 class ARVState(StatesGroup):
     edit_text = State()
+    add_product = State()
+    add_username = State()
+    add_text = State()
 
 
 def _btn(text: str, data: str) -> InlineKeyboardButton:
@@ -59,6 +62,7 @@ async def cb_home(call: CallbackQuery, db: Database, state: FSMContext) -> None:
     for r in items:
         mark = "✅" if r.status == "published" else "🆕"
         kb.row(_btn(f"{mark} {_stars(r.rating)} · {r.product_title or '—'}", f"arv:{r.id}"))
+    kb.row(_btn("➕ Добавить отзыв", "arv_add"))
     kb.row(_btn("⬅️ Назад", "a_home"))
     caption = (
         "⭐ <b>Отзывы</b>\n"
@@ -182,3 +186,85 @@ async def msg_edit(message: Message, db: Database, state: FSMContext) -> None:
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К отзыву", f"arv:{rid}"))
     await message.answer("✅ Текст отзыва обновлён", reply_markup=kb.as_markup())
+
+
+# ── Ручное добавление отзыва админом ─────────────────────────────────────────
+@router.callback_query(F.data == "arv_add")
+async def cb_add_start(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ARVState.add_product)
+    await call.message.edit_text(
+        "➕ <b>Новый отзыв (вручную)</b>\n\n"
+        "Шаг 1/4. Пришлите <b>название товара</b> (как показать в отзыве).",
+        reply_markup=InlineKeyboardBuilder().row(_btn("⬅️ Отмена", "arv_home")).as_markup(),
+    )
+    await call.answer()
+
+
+@router.message(ARVState.add_product)
+async def msg_add_product(message: Message, state: FSMContext) -> None:
+    title = (message.text or "").strip()
+    if not title:
+        await message.answer("Пусто. Пришлите название товара.")
+        return
+    await state.update_data(product_title=title[:255])
+    kb = InlineKeyboardBuilder()
+    for n in (1, 2, 3, 4, 5):
+        kb.button(text=str(n), callback_data=f"arvrate:{n}")
+    kb.adjust(5)
+    kb.row(_btn("⬅️ Отмена", "arv_home"))
+    await message.answer("Шаг 2/4. Выберите <b>оценку</b>:", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("arvrate:"))
+async def cb_add_rating(call: CallbackQuery, state: FSMContext) -> None:
+    rating = int(call.data.split(":", 1)[1])
+    await state.update_data(rating=rating)
+    await state.set_state(ARVState.add_username)
+    await call.message.edit_text(
+        f"Оценка: {_stars(rating)}\n\n"
+        "Шаг 3/4. Пришлите <b>@username</b> покупателя (или <code>-</code>, чтобы без имени).",
+        reply_markup=InlineKeyboardBuilder().row(_btn("⬅️ Отмена", "arv_home")).as_markup(),
+    )
+    await call.answer()
+
+
+@router.message(ARVState.add_username)
+async def msg_add_username(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    username = None if raw in ("", "-") else raw.lstrip("@")[:64]
+    await state.update_data(username=username)
+    await state.set_state(ARVState.add_text)
+    await message.answer(
+        "Шаг 4/4. Пришлите <b>текст отзыва</b> (можно премиум-эмодзи).",
+        reply_markup=InlineKeyboardBuilder().row(_btn("⬅️ Отмена", "arv_home")).as_markup(),
+    )
+
+
+@router.message(ARVState.add_text)
+async def msg_add_text(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    text = (message.html_text or message.text or "").strip()
+    if not text:
+        await message.answer("Пусто. Пришлите текст отзыва.")
+        return
+    async with db.session() as session:
+        review = await review_service.create_review(
+            session,
+            order_id=None,
+            user_id=0,  # добавлено вручную админом
+            username=data.get("username"),
+            variant_id=None,
+            product_title=data.get("product_title"),
+            amount_usd=None,
+            rating=int(data.get("rating", 5)),
+            text=text,
+        )
+        # Ручной отзыв сразу публикуем.
+        await review_service.set_status(session, review.id, "published")
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К отзывам", "arv_home"))
+    await message.answer(
+        "✅ Отзыв добавлен и опубликован.", reply_markup=kb.as_markup()
+    )
