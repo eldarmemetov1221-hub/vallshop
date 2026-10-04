@@ -105,6 +105,18 @@ async def cb_balance(
 # ── Пополнение (сначала сеть, затем сумма) ───────────────────────────────────
 @router.callback_query(F.data == "topup")
 async def cb_topup(call: CallbackQuery, config: BotConfig, state: FSMContext) -> None:
+    await state.clear()
+    await render(
+        call,
+        banner="profile",
+        caption=texts.TOPUP_CHOOSE_PAYMENT,
+        reply_markup=kb.topup_methods_kb(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "tu_usdt")
+async def cb_topup_usdt(call: CallbackQuery, config: BotConfig, state: FSMContext) -> None:
     await state.set_state(TopUpFlow.waiting_network)
     await render(
         call,

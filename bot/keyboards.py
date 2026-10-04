@@ -55,6 +55,7 @@ EMOJI = {
     "reviews": "5890925363067886150",       # отзывы
     "earn": "5904462880941545555",          # заработать
     "referral": "5879905000972358125",      # реферальная система
+    "usdt": "5891105528356018797",          # способ оплаты USDT
 }
 
 SUPPORT_URL = "https://t.me/vallmanager"
@@ -288,6 +289,14 @@ def balance_kb() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def topup_methods_kb() -> InlineKeyboardMarkup:
+    """Выбор способа пополнения. Пока — только USDT (внутри — выбор сети)."""
+    kb = InlineKeyboardBuilder()
+    kb.row(_b("USDT", callback_data="tu_usdt", style="primary", icon=EMOJI["usdt"]))
+    kb.row(_b("Отмена", callback_data="balance", icon=EMOJI["back"]))
+    return kb.as_markup()
+
+
 def topup_networks_kb(networks: list[str]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for net in networks:
@@ -298,7 +307,7 @@ def topup_networks_kb(networks: list[str]) -> InlineKeyboardMarkup:
                 style=NETWORK_STYLES.get(net.upper()),
             )
         )
-    kb.row(_b("Отмена", callback_data="balance", icon=EMOJI["back"]))
+    kb.row(_b("Назад", callback_data="topup", icon=EMOJI["back"]))
     return kb.as_markup()
 
 
