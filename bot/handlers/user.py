@@ -10,7 +10,7 @@ import json
 from decimal import Decimal
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -26,6 +26,7 @@ from ..db import Database
 from ..services import catalog as catalog_service
 from ..services import menu as menu_service
 from ..services import notify as notify_service
+from ..services import referral as referral_service
 from ..services import orders as order_service
 from ..services import stock as stock_service
 from ..services.balance import get_balance
@@ -59,16 +60,23 @@ async def _clear_reply_keyboard(message: Message) -> None:
 
 @router.message(CommandStart())
 async def cmd_start(
-    message: Message, db: Database, config: BotConfig, state: FSMContext
+    message: Message, db: Database, config: BotConfig, state: FSMContext,
+    command: CommandObject = None,
 ) -> None:
     await state.clear()
+    ref_id = referral_service.parse_ref_payload(command.args if command else None)
     async with db.session() as session:
-        await order_service.ensure_user(
+        from ..db.models import User as _User
+        is_new = await session.get(_User, message.from_user.id) is None
+        user = await order_service.ensure_user(
             session,
             user_id=message.from_user.id,
             username=message.from_user.username,
             full_name=message.from_user.full_name,
         )
+        # Привязываем пригласившего только для новых пользователей.
+        if is_new and ref_id:
+            await referral_service.bind_referral(session, user, ref_id)
         await session.commit()
     await _clear_reply_keyboard(message)
     is_admin = config.is_admin(message.from_user.id)

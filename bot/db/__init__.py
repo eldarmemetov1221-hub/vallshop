@@ -8,6 +8,7 @@ from .models import (
     PaymentStatus,
     MenuButton,
     Product,
+    ReferralEarning,
     Review,
     Setting,
     StockItem,
@@ -35,4 +36,5 @@ __all__ = [
     "Setting",
     "Review",
     "MenuButton",
+    "ReferralEarning",
 ]

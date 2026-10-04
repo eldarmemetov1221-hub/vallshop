@@ -25,6 +25,7 @@ from ..services import balance as balance_service
 from ..services import catalog as catalog_service
 from ..services import notify as notify_service
 from ..services import orders as order_service
+from ..services import referral as referral_service
 from ..services import settings as settings_service
 from .. import keyboards as kb
 from .. import texts
@@ -89,6 +90,7 @@ async def _tick(
                         fresh.status = OrderStatus.REFUNDED
                         status = OrderStatus.REFUNDED
                         refunded = True
+                        await referral_service.reverse_for_order(session, fresh)
                         refund_text = await settings_service.get(
                             session, settings_service.REFUND_TEXT, texts.FULFILL_REFUNDED
                         )

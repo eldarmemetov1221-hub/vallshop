@@ -23,6 +23,7 @@ from fazercard import FazerCardClient, FazerCardError
 
 from ..db.models import Order, OrderStatus, User, Variant
 from . import balance as balance_service
+from . import referral as referral_service
 from . import settings as settings_service
 from . import stock as stock_service
 
@@ -146,6 +147,7 @@ async def purchase_from_balance(
     order.delivery_code = "\n".join(codes)
     order.status = OrderStatus.COMPLETED
     await session.flush()
+    await referral_service.accrue_for_order(session, order)
     return order, codes
 
 
@@ -238,6 +240,8 @@ async def _fulfill_fazercard(
             order.status = OrderStatus.COMPLETED
         # иначе (ключ/карта без кода) — остаёмся FULFILLING, коды дотянет поллер
         await session.flush()
+        if order.status == OrderStatus.COMPLETED:
+            await referral_service.accrue_for_order(session, order)
         return order, codes
 
     if FazerCardClient.status_is_terminal_failed(data):
@@ -282,6 +286,8 @@ async def poll_fazercard(
         order.status = OrderStatus.FAILED
     # иначе остаётся FULFILLING
     await session.flush()
+    if order.status == OrderStatus.COMPLETED:
+        await referral_service.accrue_for_order(session, order)
     return order.status
 
 
@@ -341,6 +347,8 @@ async def poll_topup(
         order.status = OrderStatus.FAILED
     # иначе остаётся FULFILLING (PROCESSING)
     await session.flush()
+    if order.status == OrderStatus.COMPLETED:
+        await referral_service.accrue_for_order(session, order)
     return order.status
 
 
@@ -355,6 +363,7 @@ async def deliver_code_manual(
     order.status = OrderStatus.COMPLETED
     order.fail_reason = None
     await session.flush()
+    await referral_service.accrue_for_order(session, order)
 
 
 async def deliver_topup_manual(session: AsyncSession, order: Order) -> None:
@@ -362,6 +371,7 @@ async def deliver_topup_manual(session: AsyncSession, order: Order) -> None:
     order.status = OrderStatus.COMPLETED
     order.fail_reason = None
     await session.flush()
+    await referral_service.accrue_for_order(session, order)
 
 
 async def cancel_order_manual(session: AsyncSession, order: Order) -> Decimal:
@@ -370,6 +380,7 @@ async def cancel_order_manual(session: AsyncSession, order: Order) -> Decimal:
     await balance_service.credit(session, order.user_id, refund)
     order.status = OrderStatus.REFUNDED
     await session.flush()
+    await referral_service.reverse_for_order(session, order)
     return refund
 
 

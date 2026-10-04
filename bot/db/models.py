@@ -72,6 +72,13 @@ class User(Base):
     balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+    # Реферальная программа.
+    referred_by: Mapped[Optional[int]] = mapped_column(Integer, index=True)  # кто пригласил
+    ref_balance_usdt: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    ref_balance_rub: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    ref_earned_usdt: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    ref_earned_rub: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+
     orders: Mapped[List["Order"]] = relationship(back_populates="user")
 
 
@@ -310,6 +317,23 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class ReferralEarning(Base):
+    """Журнал реферальных начислений (для прозрачности и сторно при возврате)."""
+
+    __tablename__ = "referral_earnings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    referrer_id: Mapped[int] = mapped_column(Integer, index=True)   # кто получил
+    referral_id: Mapped[int] = mapped_column(Integer, index=True)   # за кого (приглашённый)
+    order_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(32), default="purchase_percent")
+    currency: Mapped[str] = mapped_column(String(8), default="USDT")  # USDT | RUB
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    # "credited" | "reversed"
+    status: Mapped[str] = mapped_column(String(16), default="credited")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class MenuButton(Base):

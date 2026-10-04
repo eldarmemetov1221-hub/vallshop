@@ -8,10 +8,12 @@ from . import (
     admin_appearance,
     admin_codes,
     admin_orders,
+    admin_referral,
     admin_reviews,
     admin_stats,
     admin_ui,
     profile,
+    referral,
     reviews,
     user,
 )
@@ -25,8 +27,10 @@ def build_root_router() -> Router:
     root.include_router(admin_orders.router)
     root.include_router(admin_reviews.router)
     root.include_router(admin_appearance.router)
+    root.include_router(admin_referral.router)
     root.include_router(admin_stats.router)
     root.include_router(activation.router)
+    root.include_router(referral.router)
     root.include_router(reviews.router)
     root.include_router(profile.router)
     root.include_router(user.router)

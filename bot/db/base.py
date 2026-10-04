@@ -65,6 +65,11 @@ class Database:
             ("products", "banner_file_id", "VARCHAR(255)"),
             ("orders", "fields_json", "TEXT"),
             ("orders", "fail_reason", "VARCHAR(255)"),
+            ("users", "referred_by", "INTEGER"),
+            ("users", "ref_balance_usdt", "NUMERIC(12,2) NOT NULL DEFAULT 0"),
+            ("users", "ref_balance_rub", "NUMERIC(12,2) NOT NULL DEFAULT 0"),
+            ("users", "ref_earned_usdt", "NUMERIC(12,2) NOT NULL DEFAULT 0"),
+            ("users", "ref_earned_rub", "NUMERIC(12,2) NOT NULL DEFAULT 0"),
         ]
         added_source = False
         for table, column, ddl in wanted:

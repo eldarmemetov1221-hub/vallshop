@@ -17,6 +17,13 @@ AUTO_REFUND = "orders_auto_refund"   # "1"/"0" — автовозврат ден
 REFUND_TEXT = "orders_refund_text"   # текст покупателю при автовозврате
 CANCEL_TEXT = "orders_cancel_text"   # текст покупателю при ручной отмене
 
+# Реферальная программа
+REF_ENABLED = "ref_enabled"              # "1"/"0"
+REF_PERCENT = "ref_percent"              # процент с покупок, напр. "5"
+REF_MIN_WD_USDT = "ref_min_withdraw_usdt"  # минимум перевода, USDT
+REF_MIN_WD_RUB = "ref_min_withdraw_rub"    # минимум перевода, RUB
+REF_TERMS = "ref_terms_text"             # текст условий
+
 
 async def get(session: AsyncSession, key: str, default: Optional[str] = None) -> Optional[str]:
     row = await session.get(Setting, key)

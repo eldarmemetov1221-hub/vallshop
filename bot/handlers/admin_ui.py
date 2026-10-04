@@ -120,7 +120,7 @@ def _panel_kb() -> InlineKeyboardMarkup:
     kb.row(_btn("🛒 Текущие заказы", "co_home"))
     kb.row(_btn("🎟 Коды активации", "ac_home"))
     kb.row(_btn("⭐ Отзывы", "arv_home"), _btn("📊 Статистика", "st_home"))
-    kb.row(_btn("🎨 Оформление", "ap_home"))
+    kb.row(_btn("🎨 Оформление", "ap_home"), _btn("👥 Рефералы", "rf_home"))
     kb.row(_btn("⬅️ Меню", "menu"))
     return kb.as_markup()
 
