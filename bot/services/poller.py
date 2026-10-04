@@ -19,8 +19,9 @@ from liogames import LioGamesClient
 from fazercard import FazerCardClient
 
 from ..db import Database
-from ..db.models import Order, OrderStatus, TopUp, TopUpStatus
+from ..db.models import Order, OrderStatus, TopUp, TopUpStatus, Variant
 from ..services import balance as balance_service
+from ..services import catalog as catalog_service
 from ..services import orders as order_service
 from .. import texts
 
@@ -80,13 +81,21 @@ async def _tick(
             code = fresh.delivery_code
             ref = fresh.client_ref
             refund_amount = Decimal(fresh.price_usd) * (fresh.quantity or 1)
+            delivered_text = texts.TOPUP_ACCOUNT_DELIVERED
+            if status == OrderStatus.COMPLETED and not code:
+                variant = await session.get(Variant, fresh.variant_id)
+                if variant is not None:
+                    delivered_text = await catalog_service.resolve_text(
+                        session, variant, "delivered_text", texts.TOPUP_ACCOUNT_DELIVERED
+                    )
             await session.commit()
 
         if status == OrderStatus.COMPLETED and code:
             await _notify(bot, user_id, texts.DELIVERY_SUCCESS.format(code=code))
         elif status == OrderStatus.COMPLETED:
-            # Топап без кода — зачислено на игровой аккаунт.
-            await _notify(bot, user_id, texts.TOPUP_ACCOUNT_DELIVERED)
+            # Доставка на аккаунт/username без кода (топап/Telegram) — настраиваемый текст.
+            if delivered_text:
+                await _notify(bot, user_id, delivered_text)
         elif status == OrderStatus.REFUNDED and refunded:
             await _notify(
                 bot, user_id,

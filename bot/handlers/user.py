@@ -455,6 +455,12 @@ async def cb_topup_confirm(
             )
             return
         status = order.status
+        pending_note = await catalog_service.resolve_text(
+            session, variant, "pending_text", texts.PENDING_NOTE_DEFAULT
+        )
+        delivered_text = await catalog_service.resolve_text(
+            session, variant, "delivered_text", texts.TOPUP_ACCOUNT_DELIVERED
+        )
         await session.commit()
         total = unit_price
         balance = await get_balance(session, call.from_user.id)
@@ -472,13 +478,15 @@ async def cb_topup_confirm(
             reply_markup=kb.after_purchase_kb(),
         )
     elif status == OrderStatus.COMPLETED:
-        await call.message.answer(
-            texts.TOPUP_ACCOUNT_DELIVERED, reply_markup=kb.after_purchase_kb()
-        )
+        if delivered_text:
+            await call.message.answer(delivered_text, reply_markup=kb.after_purchase_kb())
+        else:
+            await call.message.answer("✅ Заказ выполнен!", reply_markup=kb.after_purchase_kb())
     else:  # FULFILLING
+        note = f"\n\n{pending_note}" if pending_note else ""
         await call.message.answer(
             texts.PURCHASE_PENDING.format(
-                item=item_name, qty=1, total=total_str, balance=bal_str
+                item=item_name, qty=1, total=total_str, balance=bal_str, note=note
             ),
             reply_markup=kb.after_purchase_kb(),
         )
@@ -541,12 +549,16 @@ async def cb_confirm(
             return
 
         pending = order.status == OrderStatus.FULFILLING and not codes
+        pending_note = await catalog_service.resolve_text(
+            session, variant, "pending_text", texts.PENDING_NOTE_DEFAULT
+        )
         await session.commit()
         total = unit_price * qty
         balance = await get_balance(session, call.from_user.id)
         item_name = variant.title
 
     if pending:
+        note = f"\n\n{pending_note}" if pending_note else ""
         await render(
             call,
             banner="catalog",
@@ -555,6 +567,7 @@ async def cb_confirm(
                 qty=qty,
                 total=texts.money(total, config.currency),
                 balance=texts.money(balance, config.currency),
+                note=note,
             ),
             reply_markup=kb.after_purchase_kb(),
         )

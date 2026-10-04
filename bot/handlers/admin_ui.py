@@ -64,6 +64,7 @@ class AdminUI(StatesGroup):
     add_subcat = State()
     set_var_title = State()
     set_price_rub = State()
+    set_text = State()
     fzr_search = State()
     fzr_price = State()
 
@@ -211,6 +212,10 @@ async def _product_card(session, config: BotConfig, product_id: int):
         _btn("🙂 Эмодзи", f"a_pemoji:{product_id}"),
         _btn("🔁 Вкл/выкл товар", f"a_tprod:{product_id}"),
     )
+    kb.row(
+        _btn("⏳ Текст ожидания", f"a_txt:p:pend:{product_id}"),
+        _btn("✅ Текст выдачи", f"a_txt:p:deliv:{product_id}"),
+    )
     back = f"a_prod:{product.parent_id}" if product.parent_id else "a_prods"
     kb.row(_btn("⬅️ Назад", back))
     return caption, kb.as_markup()
@@ -292,6 +297,10 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
     kb.row(
         _btn("🙂 Эмодзи", f"a_vemoji:{variant_id}"),
         _btn("🔁 Вкл/выкл", f"a_tvar:{variant_id}"),
+    )
+    kb.row(
+        _btn("⏳ Текст ожидания", f"a_txt:v:pend:{variant_id}"),
+        _btn("✅ Текст выдачи", f"a_txt:v:deliv:{variant_id}"),
     )
     kb.row(_btn("⬅️ Назад", f"a_prod:{v.product_id}"))
     return caption, kb.as_markup(), v.product_id
@@ -840,6 +849,87 @@ async def msg_set_rub(message: Message, db: Database, state: FSMContext) -> None
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
     await message.answer("✅ Цена ₽ обновлена", reply_markup=kb.as_markup())
+
+
+# ── Редактируемые тексты «ожидание»/«выдача» ────────────────────────────────
+# Наследование: номинал → товар → родительская категория → дефолт.
+#   обычный текст — задать своё значение;
+#   «0» — сбросить (наследовать с уровня выше / дефолт);
+#   «-» — скрыть (пустой текст, наследование останавливается).
+_TXT_FIELD = {"pend": "pending_text", "deliv": "delivered_text"}
+_TXT_LABEL = {"pend": "⏳ текст ожидания", "deliv": "✅ текст выдачи"}
+
+
+def _txt_default(field: str) -> str:
+    return (
+        texts.PENDING_NOTE_DEFAULT if field == "pending_text"
+        else texts.TOPUP_ACCOUNT_DELIVERED
+    )
+
+
+@router.callback_query(F.data.startswith("a_txt:"))
+async def cb_set_text(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    # a_txt:{kind p|v}:{field pend|deliv}:{id}
+    _, kind, fkey, raw_id = call.data.split(":", 3)
+    obj_id = int(raw_id)
+    field = _TXT_FIELD.get(fkey)
+    if field is None or kind not in ("p", "v"):
+        await call.answer("Неизвестно", show_alert=True)
+        return
+    back = f"a_var:{obj_id}" if kind == "v" else f"a_prod:{obj_id}"
+    async with db.session() as session:
+        obj = await session.get(Variant if kind == "v" else Product, obj_id)
+        if not obj:
+            await call.answer("Не найдено", show_alert=True)
+            return
+        cur = getattr(obj, field, None)
+    if cur is None:
+        cur_line = "сейчас: <i>наследуется / по умолчанию</i>"
+    elif cur == "":
+        cur_line = "сейчас: <i>скрыт (ничего не отправляется)</i>"
+    else:
+        cur_line = f"сейчас:\n<blockquote>{cur}</blockquote>"
+    await state.set_state(AdminUI.set_text)
+    await state.update_data(txt_kind=kind, txt_field=field, txt_id=obj_id)
+    await call.message.edit_text(
+        f"✏️ Редактирование: <b>{_TXT_LABEL[fkey]}</b>\n{cur_line}\n\n"
+        "Пришлите новый текст.\n"
+        "<code>0</code> — сбросить (наследовать с уровня выше или дефолт).\n"
+        "<code>-</code> — скрыть (ничего не отправлять покупателю).",
+        reply_markup=_cancel_kb(back),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_text)
+async def msg_set_text(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    kind = data.get("txt_kind")
+    field = data.get("txt_field")
+    obj_id = data.get("txt_id")
+    raw = (message.text or "").strip()
+    if not raw:
+        await message.answer("Пусто. Пришлите текст, либо 0 (сброс) / - (скрыть).")
+        return
+    if raw == "0":
+        value, note = None, "сброшен (наследуется / по умолчанию)"
+    elif raw == "-":
+        value, note = "", "скрыт — покупателю ничего не отправляется"
+    else:
+        value, note = raw, "обновлён"
+    back = f"a_var:{obj_id}" if kind == "v" else f"a_prod:{obj_id}"
+    async with db.session() as session:
+        obj = await session.get(Variant if kind == "v" else Product, obj_id)
+        if not obj:
+            await state.clear()
+            await message.answer("Объект не найден")
+            return
+        setattr(obj, field, value)
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ Назад", back))
+    await message.answer(f"✅ Текст {note}", reply_markup=kb.as_markup())
 
 
 @router.callback_query(F.data.startswith("a_setprice:"))

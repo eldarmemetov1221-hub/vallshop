@@ -58,6 +58,10 @@ class Database:
             ("products", "parent_id", "INTEGER"),
             ("variants", "price_rub", "NUMERIC(12,2)"),
             ("users", "block_reason", "VARCHAR(255)"),
+            ("products", "pending_text", "TEXT"),
+            ("products", "delivered_text", "TEXT"),
+            ("variants", "pending_text", "TEXT"),
+            ("variants", "delivered_text", "TEXT"),
         ]
         added_source = False
         for table, column, ddl in wanted:

@@ -95,6 +95,11 @@ class Product(Base):
     )
     # Кастом-эмодзи (custom_emoji_id) для иконки кнопки товара.
     icon_emoji_id: Mapped[Optional[str]] = mapped_column(String(32))
+    # Настраиваемые тексты (наследуются номиналами). None = наследовать/дефолт,
+    # "" = скрыть. pending_text — строка «оформляем…», delivered_text — сообщение
+    # об успешной выдаче на аккаунт (без кода).
+    pending_text: Mapped[Optional[str]] = mapped_column(Text)
+    delivered_text: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     variants: Mapped[List["Variant"]] = relationship(
@@ -137,6 +142,9 @@ class Variant(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     # Кастом-эмодзи (custom_emoji_id) для иконки кнопки номинала.
     icon_emoji_id: Mapped[Optional[str]] = mapped_column(String(32))
+    # Тексты уровня номинала (приоритетнее товара). None = наследовать, "" = скрыть.
+    pending_text: Mapped[Optional[str]] = mapped_column(Text)
+    delivered_text: Mapped[Optional[str]] = mapped_column(Text)
 
     # Источник выдачи: "stock" (свой сток), "liogames" (сток+ручная закупка),
     # "fazercard" (buy-on-demand у FazerCard).

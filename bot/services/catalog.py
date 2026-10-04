@@ -108,6 +108,31 @@ async def list_variants(
     return list(await session.scalars(stmt))
 
 
+async def resolve_text(
+    session: AsyncSession, variant: Variant, field: str, default: str
+) -> str:
+    """Текст с наследованием: номинал → товар → родительский товар → дефолт.
+
+    Значение ``None`` на уровне = «наследовать дальше», ``""`` = «скрыть»
+    (останавливает наследование и возвращает пустую строку).
+    """
+    v = getattr(variant, field, None)
+    if v is not None:
+        return v
+    product = await session.get(Product, variant.product_id)
+    if product is not None:
+        pv = getattr(product, field, None)
+        if pv is not None:
+            return pv
+        if product.parent_id:
+            parent = await session.get(Product, product.parent_id)
+            if parent is not None:
+                ppv = getattr(parent, field, None)
+                if ppv is not None:
+                    return ppv
+    return default
+
+
 async def get_variant(session: AsyncSession, variant_id: int) -> Optional[Variant]:
     # Жадно подгружаем product, чтобы обращение к variant.product не вызывало
     # ленивую загрузку в async-контексте (SQLAlchemy async её не допускает).
