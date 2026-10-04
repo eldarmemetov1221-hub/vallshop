@@ -29,6 +29,7 @@ class Entry:
     kind: str                 # "cb" | "url"
     target: str               # callback_data, либо ключ URL (offer/agreement/privacy), либо прямой url
     order: int
+    full_width: bool = False  # True — кнопка занимает всю строку (не встаёт в пару)
 
 
 # Колонок в ряд для каждого меню.
@@ -38,21 +39,21 @@ MENU_TITLES = {"main": "Главное меню", "profile": "Профиль", "
 MENU_CAPTION = {"main": "cap_main", "faq": "cap_faq"}
 
 REGISTRY: List[Entry] = [
-    # Главное меню
+    # Главное меню: [Каталог, Профиль] / [Активировать Код] / [FAQ, Отзывы]
     Entry("main.catalog",  "main", "Каталог",            "5805550320985578625", "primary", "cb", "catalog", 10),
     Entry("main.profile",  "main", "Мой профиль",        "6035084557378654059", "success", "cb", "profile", 20),
-    Entry("main.activate", "main", "Активировать Код",   "5422711448914647622", "primary", "cb", "activate", 30),
+    Entry("main.activate", "main", "Активировать Код",   "5422711448914647622", "primary", "cb", "activate", 30, full_width=True),
     Entry("main.faq",      "main", "FAQ / Правила",      "6030848053177486888", "danger",  "cb", "faq", 40),
     Entry("main.reviews",  "main", "Отзывы",             "5890925363067886150", "primary", "cb", "reviews", 50),
-    # Профиль
+    # Профиль (каждая на своей строке)
     Entry("profile.balance",  "profile", "Мой баланс",          "5778421276024509124", "danger",  "cb", "balance", 10),
     Entry("profile.myorders", "profile", "Мои заказы",          "5904359114531675993", "primary", "cb", "myorders", 20),
     Entry("profile.mytopups", "profile", "История пополнений",  "6039859895291877126", None,      "cb", "mytopups", 30),
-    # FAQ / Правила (support — прямой url; остальные — url из конфига по ключу)
-    Entry("faq.support",   "faq", "Техподдержка",                  "6021618194228187816", "primary", "url", "support", 10),
+    # FAQ / Правила: [Техподдержка] / [Конфиденциальность, Соглашение] / [Оферта]
+    Entry("faq.support",   "faq", "Техподдержка",                  "6021618194228187816", "primary", "url", "support", 10, full_width=True),
     Entry("faq.privacy",   "faq", "Политика конфиденциальности",   "5935757052042285202", None,      "url", "privacy", 20),
     Entry("faq.agreement", "faq", "Политика соглашения",           "6030445631921721471", None,      "url", "agreement", 30),
-    Entry("faq.offer",     "faq", "Публичная оферта",              "6030445631921721471", "success", "url", "offer", 40),
+    Entry("faq.offer",     "faq", "Публичная оферта",              "6030445631921721471", "success", "url", "offer", 40, full_width=True),
 ]
 
 _BY_KEY: Dict[str, Entry] = {e.key: e for e in REGISTRY}
@@ -72,6 +73,7 @@ class Resolved:
     target: str
     enabled: bool
     order: int
+    full_width: bool
 
 
 def _resolve_one(e: Entry) -> Resolved:
@@ -87,6 +89,7 @@ def _resolve_one(e: Entry) -> Resolved:
         target=e.target,
         enabled=ov.get("enabled", True),
         order=ov.get("sort_order") if ov.get("sort_order") is not None else e.order,
+        full_width=e.full_width,
     )
 
 

@@ -77,15 +77,36 @@ def _render_menu(menu: str, url_map: Optional[dict] = None):
     url_map = url_map or {}
     cols = menu_service.MENU_COLUMNS.get(menu, 1)
     kb = InlineKeyboardBuilder()
-    for r in menu_service.menu_entries(menu):
+
+    def _mk(r):
         if r.kind == "url":
             url = SUPPORT_URL if r.target == "support" else url_map.get(r.target)
             if not url:
-                continue  # нет ссылки — пропускаем
-            kb.add(_b(r.text, url=url, style=r.style, icon=r.emoji_id or None))
+                return None  # нет ссылки — пропускаем
+            return _b(r.text, url=url, style=r.style, icon=r.emoji_id or None)
+        return _b(r.text, callback_data=r.target, style=r.style, icon=r.emoji_id or None)
+
+    # Раскладка: обычные кнопки встают парами (по cols), full_width — на всю строку.
+    # Позиции стабильны: скрытие/показ не перетасовывает соседей по рядам.
+    buf: list = []
+
+    def _flush():
+        if buf:
+            kb.row(*buf)
+            buf.clear()
+
+    for r in menu_service.menu_entries(menu):
+        btn = _mk(r)
+        if btn is None:
+            continue
+        if r.full_width or cols <= 1:
+            _flush()
+            kb.row(btn)
         else:
-            kb.add(_b(r.text, callback_data=r.target, style=r.style, icon=r.emoji_id or None))
-    kb.adjust(max(1, cols))
+            buf.append(btn)
+            if len(buf) >= cols:
+                _flush()
+    _flush()
     return kb
 
 
