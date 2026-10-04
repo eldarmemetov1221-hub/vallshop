@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -28,6 +28,16 @@ from .. import keyboards as kb
 from .. import texts
 
 router = Router()
+
+# Минимум платежа крипто-провайдера (BoltUtil) — 1 USDT. Рублёвый минимум
+# пополнения не может быть ниже его эквивалента по текущему курсу.
+PROVIDER_MIN_USDT = Decimal("1")
+
+
+def _min_topup_rub() -> Decimal:
+    rate = rates_service.get_rate()
+    dyn = (PROVIDER_MIN_USDT * rate).quantize(Decimal("1"), rounding=ROUND_CEILING)
+    return max(TOPUP_MIN, dyn)
 
 
 class TopUpFlow(StatesGroup):
@@ -140,7 +150,7 @@ async def cb_topup_network(
     await render(
         call,
         banner="profile",
-        caption=texts.TOPUP_ASK_AMOUNT.format(min=TOPUP_MIN, max=TOPUP_MAX),
+        caption=texts.TOPUP_ASK_AMOUNT.format(min=_min_topup_rub(), max=TOPUP_MAX),
         reply_markup=kb.topup_cancel_kb(),
     )
     await call.answer()
@@ -155,13 +165,14 @@ async def msg_topup_amount(
     state: FSMContext,
 ) -> None:
     raw = (message.text or "").strip().replace(",", ".")
+    min_rub = _min_topup_rub()
     try:
         amount = Decimal(raw)
     except (InvalidOperation, ValueError):
-        await message.answer(texts.TOPUP_BAD_AMOUNT.format(min=TOPUP_MIN, max=TOPUP_MAX))
+        await message.answer(texts.TOPUP_BAD_AMOUNT.format(min=min_rub, max=TOPUP_MAX))
         return
-    if amount < TOPUP_MIN or amount > TOPUP_MAX:
-        await message.answer(texts.TOPUP_BAD_AMOUNT.format(min=TOPUP_MIN, max=TOPUP_MAX))
+    if amount < min_rub or amount > TOPUP_MAX:
+        await message.answer(texts.TOPUP_BAD_AMOUNT.format(min=min_rub, max=TOPUP_MAX))
         return
 
     data = await state.get_data()
