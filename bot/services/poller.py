@@ -18,11 +18,14 @@ from sqlalchemy import select
 from liogames import LioGamesClient
 from fazercard import FazerCardClient
 
+from ..config import BotConfig
 from ..db import Database
 from ..db.models import Order, OrderStatus, TopUp, TopUpStatus, Variant
 from ..services import balance as balance_service
 from ..services import catalog as catalog_service
+from ..services import notify as notify_service
 from ..services import orders as order_service
+from ..services import settings as settings_service
 from .. import texts
 
 log = logging.getLogger("vallshop.poller")
@@ -33,12 +36,13 @@ async def run_fulfillment_poller(
     db: Database,
     liog: LioGamesClient,
     fzr: FazerCardClient | None = None,
+    config: BotConfig | None = None,
     interval: float = 20.0,
 ) -> None:
     """Бесконечный цикл опроса незавершённых заказов (LioGames + FazerCard)."""
     while True:
         try:
-            await _tick(bot, db, liog, fzr)
+            await _tick(bot, db, liog, fzr, config)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — поллер не должен падать
@@ -47,7 +51,11 @@ async def run_fulfillment_poller(
 
 
 async def _tick(
-    bot: Bot, db: Database, liog: LioGamesClient, fzr: FazerCardClient | None
+    bot: Bot,
+    db: Database,
+    liog: LioGamesClient,
+    fzr: FazerCardClient | None,
+    config: BotConfig | None = None,
 ) -> None:
     async with db.session() as session:
         orders = list(
@@ -63,33 +71,54 @@ async def _tick(
                 continue
 
             refunded = False
+            needs_action = False
+            refund_text = None
             if fresh.supplier == "fazercard":
                 if fzr is None:
                     continue  # клиент не настроен — пропускаем
                 status = await order_service.poll_fazercard(session, fresh, fzr)
                 if status == OrderStatus.FAILED:
-                    # buy-on-demand оплачивался с баланса — возвращаем деньги.
-                    refund = Decimal(fresh.price_usd) * (fresh.quantity or 1)
-                    await balance_service.credit(session, fresh.user_id, refund)
-                    fresh.status = OrderStatus.REFUNDED
-                    status = OrderStatus.REFUNDED
-                    refunded = True
+                    auto = await settings_service.get_bool(
+                        session, settings_service.AUTO_REFUND, True
+                    )
+                    if auto:
+                        # buy-on-demand оплачивался с баланса — возвращаем деньги.
+                        refund = Decimal(fresh.price_usd) * (fresh.quantity or 1)
+                        await balance_service.credit(session, fresh.user_id, refund)
+                        fresh.status = OrderStatus.REFUNDED
+                        status = OrderStatus.REFUNDED
+                        refunded = True
+                        refund_text = await settings_service.get(
+                            session, settings_service.REFUND_TEXT, texts.FULFILL_REFUNDED
+                        )
+                    else:
+                        # Автовозврат выключен — в ручную обработку, деньги остаются.
+                        fresh.status = OrderStatus.NEEDS_ACTION
+                        fresh.fail_reason = fresh.fail_reason or "поставщик отклонил заказ"
+                        status = OrderStatus.NEEDS_ACTION
+                        needs_action = True
             else:
                 status = await order_service.poll_topup(session, fresh, liog)
 
             user_id = fresh.user_id
             code = fresh.delivery_code
             ref = fresh.client_ref
+            order_id = fresh.id
+            reason = fresh.fail_reason or "—"
             refund_amount = Decimal(fresh.price_usd) * (fresh.quantity or 1)
             delivered_text = texts.TOPUP_ACCOUNT_DELIVERED
-            if status == OrderStatus.COMPLETED and not code:
-                variant = await session.get(Variant, fresh.variant_id)
-                if variant is not None:
+            item_name = "—"
+            variant = await session.get(Variant, fresh.variant_id)
+            if variant is not None:
+                item_name = variant.title
+                if status == OrderStatus.COMPLETED and not code:
                     delivered_text = await catalog_service.resolve_text(
                         session, variant, "delivered_text", texts.TOPUP_ACCOUNT_DELIVERED
                     )
             await session.commit()
 
+        admin_ids = list(config.admin_ids) if config else []
+        amount_str = texts.money(refund_amount)
         if status == OrderStatus.COMPLETED and code:
             await _notify(bot, user_id, texts.DELIVERY_SUCCESS.format(code=code))
         elif status == OrderStatus.COMPLETED:
@@ -99,10 +128,29 @@ async def _tick(
         elif status == OrderStatus.REFUNDED and refunded:
             await _notify(
                 bot, user_id,
-                texts.FULFILL_REFUNDED.format(ref=ref, amount=refund_amount),
+                settings_service.fmt(
+                    refund_text or texts.FULFILL_REFUNDED, ref=ref, amount=amount_str
+                ),
+            )
+            await notify_service.notify_admins(
+                bot, admin_ids,
+                f"↩️ Заказ #{order_id} (<b>{item_name}</b>) провалился и "
+                f"возвращён покупателю (<b>{amount_str}</b>).\nПричина: {reason}",
+            )
+        elif status == OrderStatus.NEEDS_ACTION and needs_action:
+            await notify_service.notify_admins(
+                bot, admin_ids,
+                f"❗️ Заказ #{order_id} (<b>{item_name}</b>) требует ручной выдачи.\n"
+                f"Причина: {reason}\n"
+                "Откройте «Админ-панель → Текущие заказы → Не выполненные».",
             )
         elif status == OrderStatus.FAILED:
             await _notify(bot, user_id, texts.FULFILL_FAILED.format(ref=ref))
+            await notify_service.notify_admins(
+                bot, admin_ids,
+                f"⚠️ Заказ #{order_id} (<b>{item_name}</b>): ошибка выдачи.\n"
+                f"Причина: {reason}",
+            )
 
 
 async def run_topup_poller(

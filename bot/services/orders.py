@@ -23,6 +23,7 @@ from fazercard import FazerCardClient, FazerCardError
 
 from ..db.models import Order, OrderStatus, User, Variant
 from . import balance as balance_service
+from . import settings as settings_service
 from . import stock as stock_service
 
 
@@ -207,7 +208,19 @@ async def _fulfill_fazercard(
     try:
         data = await asyncio.to_thread(_call)
     except FazerCardError as e:
-        raise SupplierError(str(e))
+        # Автовозврат включён — классическое поведение: бросаем ошибку, вызывающий
+        # код откатывает списание и показывает «поставщик недоступен».
+        # Выключен — деньги остаются списанными, заказ уходит в ручную обработку
+        # (раздел «Не выполненные»), покупателю показываем «оформляем…».
+        auto_refund = await settings_service.get_bool(
+            session, settings_service.AUTO_REFUND, True
+        )
+        if auto_refund:
+            raise SupplierError(str(e))
+        order.status = OrderStatus.NEEDS_ACTION
+        order.fail_reason = str(e)[:255]
+        await session.flush()
+        return order, []
 
     # order_id поставщика (для поллинга и поддержки).
     env = data.get("order") if isinstance(data, dict) else None
@@ -228,7 +241,15 @@ async def _fulfill_fazercard(
         return order, codes
 
     if FazerCardClient.status_is_terminal_failed(data):
-        raise SupplierError("FazerCard отклонил заказ")
+        auto_refund = await settings_service.get_bool(
+            session, settings_service.AUTO_REFUND, True
+        )
+        if auto_refund:
+            raise SupplierError("FazerCard отклонил заказ")
+        order.status = OrderStatus.NEEDS_ACTION
+        order.fail_reason = "FazerCard отклонил заказ"
+        await session.flush()
+        return order, []
 
     # Обрабатывается — оставляем FULFILLING, выдачу дотянет поллер.
     await session.flush()
@@ -321,6 +342,35 @@ async def poll_topup(
     # иначе остаётся FULFILLING (PROCESSING)
     await session.flush()
     return order.status
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Ручная выдача / отмена заказа администратором (раздел «Не выполненные»)
+# ──────────────────────────────────────────────────────────────────────────
+async def deliver_code_manual(
+    session: AsyncSession, order: Order, code: str
+) -> None:
+    """Выдать заказ вручную с кодом: COMPLETED + сохранить код."""
+    order.delivery_code = code
+    order.status = OrderStatus.COMPLETED
+    order.fail_reason = None
+    await session.flush()
+
+
+async def deliver_topup_manual(session: AsyncSession, order: Order) -> None:
+    """Пометить топап вручную выполненным (без кода, зачислено на аккаунт)."""
+    order.status = OrderStatus.COMPLETED
+    order.fail_reason = None
+    await session.flush()
+
+
+async def cancel_order_manual(session: AsyncSession, order: Order) -> Decimal:
+    """Отменить заказ: вернуть деньги на баланс покупателя. Возвращает сумму."""
+    refund = Decimal(order.price_usd) * (order.quantity or 1)
+    await balance_service.credit(session, order.user_id, refund)
+    order.status = OrderStatus.REFUNDED
+    await session.flush()
+    return refund
 
 
 async def fulfill(

@@ -44,6 +44,7 @@ class OrderStatus(str, enum.Enum):
     FULFILLING = "fulfilling"         # идёт выдача (сток/топап)
     COMPLETED = "completed"           # код выдан покупателю
     FAILED = "failed"                 # ошибка выдачи (нужен возврат/ручная работа)
+    NEEDS_ACTION = "needs_action"     # ошибка/нет средств у магазина — ждёт ручной выдачи
     EXPIRED = "expired"               # счёт просрочен, не оплачен
     REFUNDED = "refunded"             # возврат
 
@@ -219,6 +220,10 @@ class Order(Base):
     # Поставщик buy-on-demand ("liogames"/"fazercard") и его order_id.
     supplier: Mapped[Optional[str]] = mapped_column(String(16))
     supplier_order_id: Mapped[Optional[str]] = mapped_column(String(64))
+    # Собранные при покупке данные (топап: @username, player id и т.п.) — JSON.
+    fields_json: Mapped[Optional[str]] = mapped_column(Text)
+    # Причина ошибки выдачи (для раздела «Не выполненные»).
+    fail_reason: Mapped[Optional[str]] = mapped_column(String(255))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -296,6 +301,15 @@ class ActivationRequest(Base):
     status: Mapped[str] = mapped_column(String(16), default="review")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class Setting(Base):
+    """Глобальные настройки магазина (ключ-значение)."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class TopUpStatus(str, enum.Enum):

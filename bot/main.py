@@ -82,7 +82,7 @@ async def main() -> None:
         log.warning("Не удалось установить команды меню")
 
     tasks = [
-        asyncio.create_task(run_fulfillment_poller(bot, db, liog, fzr)),
+        asyncio.create_task(run_fulfillment_poller(bot, db, liog, fzr, config)),
         asyncio.create_task(run_topup_poller(bot, db, provider)),
     ]
     if config.public_base_url:

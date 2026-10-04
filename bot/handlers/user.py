@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from decimal import Decimal
 
 from aiogram import F, Router
@@ -23,6 +24,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from ..config import BotConfig
 from ..db import Database
 from ..services import catalog as catalog_service
+from ..services import notify as notify_service
 from ..services import orders as order_service
 from ..services import stock as stock_service
 from ..services.balance import get_balance
@@ -460,11 +462,23 @@ async def cb_topup_confirm(
             return
         except SupplierError:
             await session.rollback()
+            await notify_service.notify_admins(
+                call.message.bot, config.admin_ids,
+                f"⚠️ Поставщик отклонил заказ (<b>{variant.title}</b>) — "
+                "проверьте баланс у поставщика. Деньги покупателю не списаны.",
+            )
             await call.answer(
                 "😔 Поставщик временно недоступен, деньги не списаны.", show_alert=True
             )
             return
+        # Сохраняем собранные данные (для раздела «Не выполненные» и ручной выдачи).
+        collected = [
+            {"label": f.get("label") or f.get("key"), "value": answers.get(f["key"], "")}
+            for f in data.get("fields", [])
+        ]
+        order.fields_json = json.dumps(collected, ensure_ascii=False)
         status = order.status
+        order_id = order.id
         pending_note = await catalog_service.resolve_text(
             session, variant, "pending_text", texts.PENDING_NOTE_DEFAULT
         )
@@ -475,6 +489,13 @@ async def cb_topup_confirm(
         total = unit_price
         balance = await get_balance(session, call.from_user.id)
         item_name = variant.title
+
+    if status == OrderStatus.NEEDS_ACTION:
+        await notify_service.notify_admins(
+            call.message.bot, config.admin_ids,
+            f"❗️ Заказ #{order_id} (<b>{item_name}</b>) требует ручной выдачи.\n"
+            "Откройте «Админ-панель → Текущие заказы → Не выполненные».",
+        )
 
     await state.clear()
     bal_str = texts.money(balance, config.currency)
@@ -551,6 +572,11 @@ async def cb_confirm(
             return
         except SupplierError:
             await session.rollback()
+            await notify_service.notify_admins(
+                call.message.bot, config.admin_ids,
+                f"⚠️ Поставщик отклонил заказ (<b>{variant.title}</b>) — "
+                "проверьте баланс у поставщика. Деньги покупателю не списаны.",
+            )
             await call.answer(
                 "😔 Поставщик временно недоступен, деньги не списаны. "
                 "Попробуйте позже.",
@@ -558,7 +584,11 @@ async def cb_confirm(
             )
             return
 
-        pending = order.status == OrderStatus.FULFILLING and not codes
+        pending = order.status in (
+            OrderStatus.FULFILLING, OrderStatus.NEEDS_ACTION
+        ) and not codes
+        needs_action = order.status == OrderStatus.NEEDS_ACTION
+        order_id = order.id
         pending_note = await catalog_service.resolve_text(
             session, variant, "pending_text", texts.PENDING_NOTE_DEFAULT
         )
@@ -566,6 +596,13 @@ async def cb_confirm(
         total = unit_price * qty
         balance = await get_balance(session, call.from_user.id)
         item_name = variant.title
+
+    if needs_action:
+        await notify_service.notify_admins(
+            call.message.bot, config.admin_ids,
+            f"❗️ Заказ #{order_id} (<b>{item_name}</b>) требует ручной выдачи.\n"
+            "Откройте «Админ-панель → Текущие заказы → Не выполненные».",
+        )
 
     if pending:
         note = f"\n\n{pending_note}" if pending_note else ""
