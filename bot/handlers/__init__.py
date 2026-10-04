@@ -5,6 +5,7 @@ from aiogram import Router
 from . import (
     activation,
     admin,
+    admin_appearance,
     admin_codes,
     admin_orders,
     admin_reviews,
@@ -23,6 +24,7 @@ def build_root_router() -> Router:
     root.include_router(admin_codes.router)
     root.include_router(admin_orders.router)
     root.include_router(admin_reviews.router)
+    root.include_router(admin_appearance.router)
     root.include_router(admin_stats.router)
     root.include_router(activation.router)
     root.include_router(reviews.router)

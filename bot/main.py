@@ -48,6 +48,9 @@ async def main() -> None:
     db = Database(config.database_url)
     await db.create_all()
 
+    from .services import menu as menu_service
+    await menu_service.load(db)  # кэш оформления меню
+
     provider = build_provider(config)
     liog = LioGamesClient.from_env()
     fzr = FazerCardClient.from_env()

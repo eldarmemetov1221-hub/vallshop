@@ -14,6 +14,7 @@ from aiogram.types import InlineKeyboardButton
 from ..config import BotConfig
 from ..db import Database
 from ..db.models import Order, OrderStatus, Variant
+from ..services import menu as menu_service
 from ..services import notify as notify_service
 from ..services import reviews as review_service
 from ..ui import render
@@ -104,7 +105,7 @@ async def msg_review_text(
     # Сразу возвращаем в главное меню.
     is_admin = config.is_admin(message.from_user.id)
     await render(
-        message, banner="main", caption=texts.START,
+        message, banner="main", caption=menu_service.caption("main", texts.START),
         reply_markup=kb.main_menu_kb(is_admin),
     )
 

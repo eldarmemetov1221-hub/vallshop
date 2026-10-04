@@ -29,6 +29,7 @@ from ..config import BotConfig
 from ..db import Database
 from ..db.models import ActivationRequest
 from ..services import activation as act
+from ..services import menu as menu_service
 from ..ui import render
 from .. import keyboards as kb
 from .. import texts
@@ -83,7 +84,7 @@ async def cb_activate(call: CallbackQuery, state: FSMContext) -> None:
 async def cb_act_cancel(call: CallbackQuery, config: BotConfig, state: FSMContext) -> None:
     await state.clear()
     is_admin = config.is_admin(call.from_user.id)
-    await render(call, banner="main", caption=texts.START, reply_markup=kb.main_menu_kb(is_admin))
+    await render(call, banner="main", caption=menu_service.caption("main", texts.START), reply_markup=kb.main_menu_kb(is_admin))
     await call.answer("Отменено")
 
 

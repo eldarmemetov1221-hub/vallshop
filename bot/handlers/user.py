@@ -24,6 +24,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from ..config import BotConfig
 from ..db import Database
 from ..services import catalog as catalog_service
+from ..services import menu as menu_service
 from ..services import notify as notify_service
 from ..services import orders as order_service
 from ..services import stock as stock_service
@@ -71,13 +72,13 @@ async def cmd_start(
         await session.commit()
     await _clear_reply_keyboard(message)
     is_admin = config.is_admin(message.from_user.id)
-    await render(message, banner="main", caption=texts.START, reply_markup=kb.main_menu_kb(is_admin))
+    await render(message, banner="main", caption=menu_service.caption("main", texts.START), reply_markup=kb.main_menu_kb(is_admin))
 
 
 @router.message(Command("menu"))
 async def cmd_menu(message: Message, config: BotConfig) -> None:
     is_admin = config.is_admin(message.from_user.id)
-    await render(message, banner="main", caption=texts.START, reply_markup=kb.main_menu_kb(is_admin))
+    await render(message, banner="main", caption=menu_service.caption("main", texts.START), reply_markup=kb.main_menu_kb(is_admin))
 
 
 @router.message(F.text == "🛍 Каталог")
@@ -91,7 +92,7 @@ async def msg_catalog(message: Message, db: Database) -> None:
 @router.callback_query(F.data == "menu")
 async def cb_menu(call: CallbackQuery, config: BotConfig) -> None:
     is_admin = config.is_admin(call.from_user.id)
-    await render(call, banner="main", caption=texts.START, reply_markup=kb.main_menu_kb(is_admin))
+    await render(call, banner="main", caption=menu_service.caption("main", texts.START), reply_markup=kb.main_menu_kb(is_admin))
     await call.answer()
 
 
@@ -103,7 +104,7 @@ async def cb_noop(call: CallbackQuery) -> None:
 @router.callback_query(F.data == "faq")
 async def cb_faq(call: CallbackQuery, config: BotConfig, state: FSMContext) -> None:
     await state.clear()
-    caption = texts.FAQ
+    caption = menu_service.caption("faq", texts.FAQ)
     if not config.offer_url and config.support_contact:
         caption += texts.FAQ_NO_OFFER.format(support=config.support_contact)
     await render(

@@ -69,18 +69,28 @@ def _b(
     return InlineKeyboardButton(text=text, **kw)
 
 
-# ── Главное меню ──────────────────────────────────────────────────────────────
-def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
+# ── Главное меню (настраивается в «Оформление») ───────────────────────────────
+def _render_menu(menu: str, url_map: Optional[dict] = None):
+    """Собрать ряды кнопок меню из реестра с учётом переопределений админа."""
+    from .services import menu as menu_service
+
+    url_map = url_map or {}
+    cols = menu_service.MENU_COLUMNS.get(menu, 1)
     kb = InlineKeyboardBuilder()
-    kb.row(
-        _b("Каталог", callback_data="catalog", style="primary", icon=EMOJI["catalog"]),
-        _b("Мой профиль", callback_data="profile", style="success", icon=EMOJI["profile"]),
-    )
-    kb.row(_b("Активировать Код", callback_data="activate", style="primary", icon=EMOJI["activate"]))
-    kb.row(
-        _b("FAQ / Правила", callback_data="faq", style="danger", icon=EMOJI["faq"]),
-        _b("Отзывы", callback_data="reviews", style="primary", icon=EMOJI["reviews"]),
-    )
+    for r in menu_service.menu_entries(menu):
+        if r.kind == "url":
+            url = SUPPORT_URL if r.target == "support" else url_map.get(r.target)
+            if not url:
+                continue  # нет ссылки — пропускаем
+            kb.add(_b(r.text, url=url, style=r.style, icon=r.emoji_id or None))
+        else:
+            kb.add(_b(r.text, callback_data=r.target, style=r.style, icon=r.emoji_id or None))
+    kb.adjust(max(1, cols))
+    return kb
+
+
+def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
+    kb = _render_menu("main")
     if is_admin:
         kb.row(_b("Админ-панель", callback_data="admin", style="danger", icon=EMOJI["admin"]))
     return kb.as_markup()
@@ -91,22 +101,9 @@ def faq_kb(
     agreement_url: Optional[str] = None,
     privacy_url: Optional[str] = None,
 ) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    # Техподдержка — над политиками.
-    kb.row(_b("Техподдержка", url=SUPPORT_URL, style="primary", icon=EMOJI["support"]))
-    # Политика конфиденциальности + Политика соглашения — в один ряд.
-    if privacy_url and agreement_url:
-        kb.row(
-            _b("Политика конфиденциальности", url=privacy_url, icon=EMOJI["privacy"]),
-            _b("Политика соглашения", url=agreement_url, icon=EMOJI["agreement"]),
-        )
-    elif privacy_url:
-        kb.row(_b("Политика конфиденциальности", url=privacy_url, icon=EMOJI["privacy"]))
-    elif agreement_url:
-        kb.row(_b("Политика соглашения", url=agreement_url, icon=EMOJI["agreement"]))
-    # Публичная оферта — снизу.
-    if offer_url:
-        kb.row(_b("Публичная оферта", url=offer_url, style="success", icon=EMOJI["offer"]))
+    kb = _render_menu("faq", {
+        "offer": offer_url, "agreement": agreement_url, "privacy": privacy_url,
+    })
     kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))
     return kb.as_markup()
 
@@ -241,10 +238,7 @@ def network_label(net: str) -> str:
 
 # ── Профиль ───────────────────────────────────────────────────────────────────
 def profile_kb() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.row(_b("Мой баланс", callback_data="balance", style="danger", icon=EMOJI["balance"]))
-    kb.row(_b("Мои заказы", callback_data="myorders", style="primary", icon=EMOJI["orders"]))
-    kb.row(_b("История пополнений", callback_data="mytopups", icon=EMOJI["topups"]))
+    kb = _render_menu("profile")
     kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))
     return kb.as_markup()
 

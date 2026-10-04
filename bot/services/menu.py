@@ -1,0 +1,204 @@
+"""Оформление меню: реестр кнопок + переопределения (текст/эмодзи/порядок/видимость).
+
+Рендер клавиатур берёт данные из кэша (sync), админка меняет БД и обновляет кэш.
+Настраиваемые меню: главное ("main"), профиль ("profile"), FAQ ("faq").
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+
+from sqlalchemy import select
+
+from ..db import Database
+from ..db.models import MenuButton
+from ..services import settings as settings_service
+
+log = logging.getLogger("vallshop.menu")
+
+
+@dataclass
+class Entry:
+    key: str
+    menu: str                 # "main" | "profile" | "faq"
+    label: str                # дефолтный текст
+    emoji_id: Optional[str]   # дефолтный custom_emoji id (или None)
+    style: Optional[str]      # "primary"/"success"/"danger"/None
+    kind: str                 # "cb" | "url"
+    target: str               # callback_data, либо ключ URL (offer/agreement/privacy), либо прямой url
+    order: int
+
+
+# Колонок в ряд для каждого меню.
+MENU_COLUMNS = {"main": 2, "profile": 1, "faq": 2}
+MENU_TITLES = {"main": "Главное меню", "profile": "Профиль", "faq": "FAQ / Правила"}
+# У каких меню есть редактируемый текст экрана и ключ настройки.
+MENU_CAPTION = {"main": "cap_main", "faq": "cap_faq"}
+
+REGISTRY: List[Entry] = [
+    # Главное меню
+    Entry("main.catalog",  "main", "Каталог",            "5805550320985578625", "primary", "cb", "catalog", 10),
+    Entry("main.profile",  "main", "Мой профиль",        "6035084557378654059", "success", "cb", "profile", 20),
+    Entry("main.activate", "main", "Активировать Код",   "5422711448914647622", "primary", "cb", "activate", 30),
+    Entry("main.faq",      "main", "FAQ / Правила",      "6030848053177486888", "danger",  "cb", "faq", 40),
+    Entry("main.reviews",  "main", "Отзывы",             "5890925363067886150", "primary", "cb", "reviews", 50),
+    # Профиль
+    Entry("profile.balance",  "profile", "Мой баланс",          "5778421276024509124", "danger",  "cb", "balance", 10),
+    Entry("profile.myorders", "profile", "Мои заказы",          "5904359114531675993", "primary", "cb", "myorders", 20),
+    Entry("profile.mytopups", "profile", "История пополнений",  "6039859895291877126", None,      "cb", "mytopups", 30),
+    # FAQ / Правила (support — прямой url; остальные — url из конфига по ключу)
+    Entry("faq.support",   "faq", "Техподдержка",                  "6021618194228187816", "primary", "url", "support", 10),
+    Entry("faq.privacy",   "faq", "Политика конфиденциальности",   "5935757052042285202", None,      "url", "privacy", 20),
+    Entry("faq.agreement", "faq", "Политика соглашения",           "6030445631921721471", None,      "url", "agreement", 30),
+    Entry("faq.offer",     "faq", "Публичная оферта",              "6030445631921721471", "success", "url", "offer", 40),
+]
+
+_BY_KEY: Dict[str, Entry] = {e.key: e for e in REGISTRY}
+
+# Кэш переопределений: key -> {"label","emoji_id","enabled","sort_order"}
+_overrides: Dict[str, dict] = {}
+_captions: Dict[str, str] = {}
+
+
+@dataclass
+class Resolved:
+    key: str
+    text: str
+    emoji_id: Optional[str]
+    style: Optional[str]
+    kind: str
+    target: str
+    enabled: bool
+    order: int
+
+
+def _resolve_one(e: Entry) -> Resolved:
+    ov = _overrides.get(e.key, {})
+    label = ov.get("label")
+    emoji = ov.get("emoji_id", "__default__")
+    return Resolved(
+        key=e.key,
+        text=label if label else e.label,
+        emoji_id=e.emoji_id if emoji == "__default__" else (emoji or None),
+        style=e.style,
+        kind=e.kind,
+        target=e.target,
+        enabled=ov.get("enabled", True),
+        order=ov.get("sort_order") if ov.get("sort_order") is not None else e.order,
+    )
+
+
+def menu_entries(menu: str, *, only_enabled: bool = True) -> List[Resolved]:
+    items = [_resolve_one(e) for e in REGISTRY if e.menu == menu]
+    if only_enabled:
+        items = [r for r in items if r.enabled]
+    items.sort(key=lambda r: (r.order, r.key))
+    return items
+
+
+def get_entry(key: str) -> Optional[Entry]:
+    return _BY_KEY.get(key)
+
+
+def resolved(key: str) -> Optional[Resolved]:
+    e = _BY_KEY.get(key)
+    return _resolve_one(e) if e else None
+
+
+def caption(menu: str, default: str) -> str:
+    """Текст экрана с учётом переопределения (настройка cap_<menu>)."""
+    skey = MENU_CAPTION.get(menu)
+    if skey and _captions.get(skey):
+        return _captions[skey]
+    return default
+
+
+# ── Загрузка/обновление кэша ────────────────────────────────────────────────
+async def load(db: Database) -> None:
+    global _overrides, _captions
+    try:
+        async with db.session() as session:
+            rows = list(await session.scalars(select(MenuButton)))
+            _overrides = {
+                r.key: {
+                    "label": r.label,
+                    "emoji_id": r.emoji_id if r.emoji_id is not None else "__default__",
+                    "enabled": bool(r.enabled),
+                    "sort_order": r.sort_order,
+                }
+                for r in rows
+            }
+            caps = {}
+            for skey in set(MENU_CAPTION.values()):
+                v = await settings_service.get(session, skey)
+                if v:
+                    caps[skey] = v
+            _captions = caps
+    except Exception:  # noqa: BLE001 — кэш не должен ронять бота
+        log.exception("Не удалось загрузить оформление меню")
+
+
+async def _get_or_create(session, key: str) -> MenuButton:
+    row = await session.get(MenuButton, key)
+    if row is None:
+        e = _BY_KEY[key]
+        row = MenuButton(key=key, enabled=True, sort_order=e.order)
+        session.add(row)
+        await session.flush()
+    return row
+
+
+async def set_label(db: Database, key: str, label: Optional[str]) -> None:
+    async with db.session() as session:
+        row = await _get_or_create(session, key)
+        row.label = label  # None = сброс к дефолту
+        await session.commit()
+    await load(db)
+
+
+async def set_emoji(db: Database, key: str, emoji_id: Optional[str]) -> None:
+    """emoji_id: строка id, "" (без эмодзи) или None (сброс к дефолту)."""
+    async with db.session() as session:
+        row = await _get_or_create(session, key)
+        row.emoji_id = emoji_id
+        await session.commit()
+    await load(db)
+
+
+async def toggle(db: Database, key: str) -> None:
+    async with db.session() as session:
+        row = await _get_or_create(session, key)
+        row.enabled = not bool(row.enabled)
+        await session.commit()
+    await load(db)
+
+
+async def move(db: Database, key: str, direction: int) -> None:
+    """Переместить кнопку вверх (-1) или вниз (+1) внутри её меню."""
+    e = _BY_KEY[key]
+    ordered = menu_entries(e.menu, only_enabled=False)
+    idx = next((i for i, r in enumerate(ordered) if r.key == key), None)
+    if idx is None:
+        return
+    swap = idx + direction
+    if swap < 0 or swap >= len(ordered):
+        return
+    a, b = ordered[idx], ordered[swap]
+    async with db.session() as session:
+        ra = await _get_or_create(session, a.key)
+        rb = await _get_or_create(session, b.key)
+        ra.sort_order, rb.sort_order = b.order, a.order
+        await session.commit()
+    await load(db)
+
+
+async def set_caption(db: Database, menu: str, text: Optional[str]) -> None:
+    skey = MENU_CAPTION.get(menu)
+    if not skey:
+        return
+    async with db.session() as session:
+        await settings_service.set(session, skey, text)
+        await session.commit()
+    await load(db)

@@ -312,6 +312,22 @@ class Setting(Base):
     value: Mapped[Optional[str]] = mapped_column(Text)
 
 
+class MenuButton(Base):
+    """Переопределения оформления кнопок меню (раздел «Оформление»).
+
+    Ключ — стабильный id кнопки из реестра (bot/services/menu.py).
+    Пустые поля = значение по умолчанию из реестра.
+    """
+
+    __tablename__ = "menu_buttons"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[Optional[str]] = mapped_column(String(255))       # None = дефолт
+    emoji_id: Mapped[Optional[str]] = mapped_column(String(32))     # None = дефолт, "" = без эмодзи
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[Optional[int]] = mapped_column(Integer)      # None = дефолт
+
+
 class Review(Base):
     """Отзыв покупателя о выполненном заказе."""
 
