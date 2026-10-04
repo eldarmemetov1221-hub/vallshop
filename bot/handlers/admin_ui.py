@@ -70,6 +70,7 @@ class AdminUI(StatesGroup):
     set_text = State()
     set_banner = State()
     set_rate = State()
+    set_src_lio = State()
     fzr_search = State()
     fzr_price = State()
 
@@ -356,6 +357,7 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
         _btn("⏳ Текст ожидания", f"a_txt:v:pend:{variant_id}"),
         _btn("✅ Текст выдачи", f"a_txt:v:deliv:{variant_id}"),
     )
+    kb.row(_btn("🏷 Поставщик", f"a_src:{variant_id}"))
     kb.row(_btn("🗑 Удалить номинал", f"a_vdel:{variant_id}"))
     kb.row(_btn("⬅️ Назад", f"a_prod:{v.product_id}"))
     return caption, kb.as_markup(), v.product_id
@@ -877,10 +879,126 @@ _FZR_RESULTS = 20   # сколько категорий показывать п�
 _FZR_OFFERS = 40    # сколько номиналов показывать в категории
 
 
+# ── Поставщик номинала (источник выдачи) ────────────────────────────────────
+_SOURCE_RU = {
+    "stock": "📦 свой сток",
+    "liogames": "🎮 LioGames",
+    "fazercard": "🧩 FazerCard",
+}
+
+
+@router.callback_query(F.data.startswith("a_src:"))
+async def cb_source(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    await state.clear()
+    vid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if not v:
+            await call.answer("Не найдено", show_alert=True)
+            return
+        cur = _SOURCE_RU.get(v.source, v.source or "—")
+        detail = ""
+        if v.source == "fazercard":
+            detail = f"\n{v.fzr_kind} · a={v.fzr_a} · b={v.fzr_b}"
+        elif v.source == "liogames":
+            detail = f"\nproduct {v.liog_product_id} / variation {v.liog_variation_id}"
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("📦 Свой сток", f"a_srcset:{vid}:stock"))
+    kb.row(_btn("🧩 FazerCard", f"a_srcfzr:{vid}"))
+    kb.row(_btn("🎮 LioGames", f"a_srclio:{vid}"))
+    kb.row(_btn("⬅️ Назад", f"a_var:{vid}"))
+    await call.message.edit_text(
+        f"🏷 <b>Поставщик номинала</b>\nСейчас: <b>{cur}</b>{detail}\n\n"
+        "Выберите, откуда выдавать этот номинал. Так можно переключить источник, "
+        "не пересоздавая номинал (например, кончился свой сток — ставим FazerCard).",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_srcset:"))
+async def cb_source_set(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    _, raw_vid, src = call.data.split(":", 2)
+    vid = int(raw_vid)
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if v:
+            v.source = src  # пока используется только "stock"
+            await session.commit()
+        caption, markup, _ = await _variant_card(session, config, vid)
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer("Источник: свой сток")
+
+
+@router.callback_query(F.data.startswith("a_srcfzr:"))
+async def cb_source_fzr(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    """Привязать номинал к FazerCard (редактирование существующего)."""
+    vid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if not v:
+            await call.answer("Не найдено", show_alert=True)
+            return
+        pid = v.product_id
+    # edit_vid в state переводит FazerCard-флоу в режим редактирования.
+    await state.update_data(pid=pid, edit_vid=vid)
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("🔑 Ключ игры", "a_fzrk:gamekey"))
+    kb.row(_btn("🎁 Подарочная карта", "a_fzrk:giftcard"))
+    kb.row(_btn("💠 Пополнение игры", "a_fzrk:topup"))
+    kb.row(_btn("⬅️ Назад", f"a_src:{vid}"))
+    await call.message.edit_text(
+        "🧩 <b>FazerCard</b> — привязка к номиналу\n\nВыберите тип:",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_srclio:"))
+async def cb_source_lio(call: CallbackQuery, state: FSMContext) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.set_src_lio)
+    await state.update_data(vid=vid)
+    await call.message.edit_text(
+        "🎮 <b>LioGames</b> — привязка к номиналу\n\n"
+        "Пришлите: <code>product_id | variation_id</code>\n"
+        "Пример: <code>66599 | 534124</code>\n"
+        "Выдача пойдёт из вашего стока кодов (как source=liogames).",
+        reply_markup=_cancel_kb(f"a_src:{vid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_src_lio)
+async def msg_source_lio(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    vid = data.get("vid")
+    parts = [p.strip() for p in (message.text or "").split("|")]
+    if len(parts) < 2:
+        await message.answer("Формат: product_id | variation_id")
+        return
+    try:
+        lp, lv = int(parts[0]), int(parts[1])
+    except ValueError:
+        await message.answer("product_id и variation_id — числа")
+        return
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if v:
+            v.source = "liogames"
+            v.liog_product_id = lp
+            v.liog_variation_id = lv
+            await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
+    await message.answer("✅ Источник: LioGames", reply_markup=kb.as_markup())
+
+
 @router.callback_query(F.data.startswith("a_addvarf:"))
 async def cb_add_variant_fzr(call: CallbackQuery, state: FSMContext) -> None:
     pid = int(call.data.split(":", 1)[1])
-    await state.update_data(pid=pid)
+    await state.update_data(pid=pid, edit_vid=None)  # создание нового номинала
     kb = InlineKeyboardBuilder()
     kb.row(_btn("🔑 Ключ игры", "a_fzrk:gamekey"))
     kb.row(_btn("🎁 Подарочная карта", "a_fzrk:giftcard"))
@@ -1037,21 +1155,41 @@ async def msg_fzr_price(message: Message, db: Database, state: FSMContext) -> No
             await message.answer("Число или -")
             return
     title = f"{cat.get('name')} · {offer.get('name')}".strip(" ·")
+    edit_vid = data.get("edit_vid")
     async with db.session() as session:
-        min_vid = await session.scalar(
-            select(func.min(Variant.liog_variation_id)).where(Variant.product_id == pid)
-        )
-        new_vid = min(0, int(min_vid or 0)) - 1
-        v = Variant(
-            product_id=pid, title=title[:255],
-            liog_product_id=0, liog_variation_id=new_vid,
-            cost_usd=cost, price_usd=price,
-            source="fazercard", fzr_kind=kind,
-            fzr_a=str(cat.get("id")), fzr_b=str(offer.get("id")),
-        )
-        session.add(v)
-        await session.commit()
-        vid = v.id
+        if edit_vid:
+            # Переключаем источник существующего номинала на FazerCard.
+            v = await session.get(Variant, edit_vid)
+            if not v:
+                await state.clear()
+                await message.answer("Номинал не найден.")
+                return
+            v.source = "fazercard"
+            v.fzr_kind = kind
+            v.fzr_a = str(cat.get("id"))
+            v.fzr_b = str(offer.get("id"))
+            v.cost_usd = cost
+            if raw != "-":
+                v.price_usd = price
+            await session.commit()
+            vid, pid = v.id, v.product_id
+            verb = "переключён на FazerCard"
+        else:
+            min_vid = await session.scalar(
+                select(func.min(Variant.liog_variation_id)).where(Variant.product_id == pid)
+            )
+            new_vid = min(0, int(min_vid or 0)) - 1
+            v = Variant(
+                product_id=pid, title=title[:255],
+                liog_product_id=0, liog_variation_id=new_vid,
+                cost_usd=cost, price_usd=price,
+                source="fazercard", fzr_kind=kind,
+                fzr_a=str(cat.get("id")), fzr_b=str(offer.get("id")),
+            )
+            session.add(v)
+            await session.commit()
+            vid = v.id
+            verb = "создан"
     await state.clear()
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
@@ -1063,7 +1201,7 @@ async def msg_fzr_price(message: Message, db: Database, state: FSMContext) -> No
             "(напр. ID), затем оформит заказ и зачислит на аккаунт."
         )
     await message.answer(
-        f"✅ Номинал FazerCard создан: <b>{title}</b>" + note,
+        f"✅ Номинал FazerCard {verb}: <b>{title}</b>" + note,
         reply_markup=kb.as_markup(),
     )
 
