@@ -182,10 +182,12 @@ def after_purchase_kb() -> InlineKeyboardMarkup:
 def order_done_kb(order_id: int, variant_id: int) -> InlineKeyboardMarkup:
     """Кнопки под сообщением о выполненном заказе."""
     kb = InlineKeyboardBuilder()
-    kb.row(_b("Оставить отзыв", callback_data=f"review:{order_id}",
-             style="success", icon=EMOJI["review_leave"]))
-    kb.row(_b("Купить ещё", callback_data=f"var:{variant_id}",
-             style="primary", icon=EMOJI["buy_more"]))
+    kb.row(
+        _b("Оставить отзыв", callback_data=f"review:{order_id}",
+           style="success", icon=EMOJI["review_leave"]),
+        _b("Купить ещё", callback_data=f"var:{variant_id}",
+           style="primary", icon=EMOJI["buy_more"]),
+    )
     kb.row(_b("Меню", callback_data="menu", icon=EMOJI["back"]))
     return kb.as_markup()
 
