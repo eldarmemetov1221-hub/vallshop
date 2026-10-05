@@ -70,6 +70,8 @@ class Database:
             ("users", "ref_balance_rub", "NUMERIC(12,2) NOT NULL DEFAULT 0"),
             ("users", "ref_earned_usdt", "NUMERIC(12,2) NOT NULL DEFAULT 0"),
             ("users", "ref_earned_rub", "NUMERIC(12,2) NOT NULL DEFAULT 0"),
+            ("products", "button_style", "VARCHAR(16)"),
+            ("products", "full_width", "BOOLEAN NOT NULL DEFAULT 0"),
         ]
         added_source = False
         for table, column, ddl in wanted:

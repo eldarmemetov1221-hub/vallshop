@@ -71,6 +71,8 @@ class AdminUI(StatesGroup):
     set_banner = State()
     set_rate = State()
     set_src_lio = State()
+    set_src_vpn = State()
+    vpn_servers = State()
     fzr_search = State()
     fzr_price = State()
 
@@ -126,7 +128,7 @@ def _panel_kb() -> InlineKeyboardMarkup:
     kb.row(_btn("🎟 Коды активации", "ac_home"))
     kb.row(_btn("⭐ Отзывы", "arv_home"), _btn("📊 Статистика", "st_home"))
     kb.row(_btn("🎨 Оформление", "ap_home"), _btn("👥 Рефералы", "rf_home"))
-    kb.row(_btn("💱 Курс USDT→₽", "a_rate"))
+    kb.row(_btn("💱 Курс USDT→₽", "a_rate"), _btn("🛡 VPN", "vpn_home"))
     kb.row(_btn("⬅️ Меню", "menu"))
     return kb.as_markup()
 
@@ -187,6 +189,86 @@ async def msg_rate(message: Message, db: Database, state: FSMContext) -> None:
     kb.row(_btn("⬅️ В админ-панель", "a_home"))
     await message.answer(
         f"✅ Курс обновлён: 1 USDT = {_fmt_rub(rate)} ₽", reply_markup=kb.as_markup()
+    )
+
+
+# ── VPN (VPNresellers) ─────────────────────────────────────────────────────────
+@router.callback_query(F.data == "vpn_home")
+async def cb_vpn_home(call: CallbackQuery, db: Database, state: FSMContext, vpn=None) -> None:
+    await state.clear()
+    balance = "—"
+    if vpn is not None and getattr(vpn, "configured", False):
+        balance = await asyncio.to_thread(vpn.balance) or "—"
+    async with db.session() as session:
+        from ..services import settings as settings_service
+        ids = await settings_service.get(session, settings_service.VPN_SERVER_IDS, "") or "—"
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("📋 Список серверов", "vpn_list"))
+    kb.row(_btn("✏️ Выбрать серверы", "vpn_pick"))
+    kb.row(_btn("⬅️ Назад", "a_home"))
+    await call.message.edit_text(
+        "🛡 <b>VPN (VPNresellers)</b>\n"
+        f"Баланс реселлера: <b>{balance}</b>\n"
+        f"Серверы в подписке (id): <b>{ids}</b>\n"
+        "Протокол: <b>VLESS</b>\n\n"
+        "Серверы попадут в ссылку-подписку клиента (он переключает их в приложении).",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "vpn_list")
+async def cb_vpn_list(call: CallbackQuery, vpn=None) -> None:
+    if vpn is None or not getattr(vpn, "configured", False):
+        await call.answer("VPN не настроен (нет токена)", show_alert=True)
+        return
+    try:
+        servers = await asyncio.to_thread(vpn.list_vless_servers)
+    except Exception as e:  # noqa: BLE001
+        await call.answer(f"Ошибка: {e}", show_alert=True)
+        return
+    lines = ["🌍 <b>VLESS-серверы</b> (id · страна · город):", ""]
+    for s in servers[:60]:
+        sid = s.get("id")
+        cc = s.get("country_code") or s.get("country") or ""
+        city = s.get("city") or ""
+        st = s.get("status") or ""
+        lines.append(f"<code>{sid}</code> · {cc} {city} {('· ' + str(st)) if st else ''}")
+    lines.append("\nСкопируй нужные id и задай их в «✏️ Выбрать серверы».")
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ Назад", "vpn_home"))
+    await call.message.edit_text("\n".join(lines), reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(F.data == "vpn_pick")
+async def cb_vpn_pick(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminUI.vpn_servers)
+    await call.message.edit_text(
+        "✏️ Пришлите <b>id серверов через запятую</b> (например <code>1,2,3</code>) — "
+        "они войдут в подписку, которую получает клиент.",
+        reply_markup=_cancel_kb("vpn_home"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.vpn_servers)
+async def msg_vpn_servers(message: Message, db: Database, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    ids = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+    if not ids:
+        await message.answer("Пришлите id через запятую, например 1,2,3")
+        return
+    async with db.session() as session:
+        from ..services import settings as settings_service
+        await settings_service.set(session, settings_service.VPN_SERVER_IDS, ",".join(ids))
+        await settings_service.set(session, settings_service.VPN_PROTOCOL, "vless")
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К VPN", "vpn_home"))
+    await message.answer(
+        f"✅ Серверы подписки: {', '.join(ids)}", reply_markup=kb.as_markup()
     )
 
 
@@ -256,6 +338,12 @@ async def _product_card(session, config: BotConfig, product_id: int):
         _btn("🖼 Баннер", f"a_pbanner:{product_id}"),
     )
     kb.row(_btn("🔁 Вкл/выкл товар", f"a_tprod:{product_id}"))
+    _fw = "↔️ Во всю строку: ✅" if getattr(product, "full_width", False) else "↔️ Во всю строку: ❌"
+    _cur_style = getattr(product, "button_style", None) or "primary"
+    kb.row(
+        _btn(f"🎨 Цвет: {_cur_style}", f"a_pstyle:{product_id}"),
+        _btn(_fw, f"a_pfw:{product_id}"),
+    )
     kb.row(
         _btn("⏳ Текст ожидания", f"a_txt:p:pend:{product_id}"),
         _btn("✅ Текст выдачи", f"a_txt:p:deliv:{product_id}"),
@@ -297,6 +385,38 @@ async def cb_toggle_product(call: CallbackQuery, db: Database, config: BotConfig
     await call.answer("Готово")
 
 
+_STYLE_CYCLE = ["primary", "success", "danger"]
+
+
+@router.callback_query(F.data.startswith("a_pstyle:"))
+async def cb_prod_style(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        product = await session.get(Product, pid)
+        if product:
+            cur = product.button_style or "primary"
+            nxt = _STYLE_CYCLE[(_STYLE_CYCLE.index(cur) + 1) % len(_STYLE_CYCLE)] \
+                if cur in _STYLE_CYCLE else "primary"
+            product.button_style = nxt
+            await session.commit()
+        caption, markup = await _product_card(session, config, pid)
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer("Цвет: синий/зелёный/красный")
+
+
+@router.callback_query(F.data.startswith("a_pfw:"))
+async def cb_prod_fullwidth(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        product = await session.get(Product, pid)
+        if product:
+            product.full_width = not bool(product.full_width)
+            await session.commit()
+        caption, markup = await _product_card(session, config, pid)
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer("Готово")
+
+
 # ── Номинал (вариация) ───────────────────────────────────────────────────────
 async def _variant_card(session, config: BotConfig, variant_id: int):
     v = await session.get(Variant, variant_id)
@@ -330,6 +450,8 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
             f"Тип: FazerCard · {v.fzr_kind} "
             f"(a={v.fzr_a}, b={v.fzr_b}) · под заказ"
             if v.source == "fazercard"
+            else f"Тип: 🛡 VPNresellers · {v.fzr_a} дн. · {v.fzr_b or 'vless'}"
+            if v.source == "vpnresellers"
             else "Тип: свой товар (без LioGames)"
             if not v.liog_product_id
             else f"LioGames: product {v.liog_product_id} / variation {v.liog_variation_id}"
@@ -880,6 +1002,7 @@ _SOURCE_RU = {
     "stock": "📦 свой сток",
     "liogames": "🎮 LioGames",
     "fazercard": "🧩 FazerCard",
+    "vpnresellers": "🛡 VPNresellers (VPN)",
 }
 
 
@@ -901,6 +1024,7 @@ async def cb_source(call: CallbackQuery, db: Database, state: FSMContext) -> Non
     kb = InlineKeyboardBuilder()
     kb.row(_btn("📦 Свой сток", f"a_srcset:{vid}:stock"))
     kb.row(_btn("🧩 FazerCard", f"a_srcfzr:{vid}"))
+    kb.row(_btn("🛡 VPNresellers (VPN)", f"a_srcvpn:{vid}"))
     kb.row(_btn("🎮 LioGames", f"a_srclio:{vid}"))
     kb.row(_btn("⬅️ Назад", f"a_var:{vid}"))
     await call.message.edit_text(
@@ -989,6 +1113,48 @@ async def msg_source_lio(message: Message, db: Database, state: FSMContext) -> N
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
     await message.answer("✅ Источник: LioGames", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("a_srcvpn:"))
+async def cb_source_vpn(call: CallbackQuery, state: FSMContext) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    await state.set_state(AdminUI.set_src_vpn)
+    await state.update_data(vid=vid)
+    await call.message.edit_text(
+        "🛡 <b>VPNresellers (VPN)</b> — привязка к номиналу\n\n"
+        "Пришлите <b>срок подписки в днях</b> (например <code>30</code>, "
+        "<code>90</code>, <code>365</code>).\n"
+        "Серверы и протокол берутся из «Админ-панель → 🛡 VPN».",
+        reply_markup=_cancel_kb(f"a_src:{vid}"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.set_src_vpn)
+async def msg_source_vpn(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    vid = data.get("vid")
+    try:
+        days = int((message.text or "").strip())
+        if days <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("Срок — положительное число дней, например 30")
+        return
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if v:
+            v.source = "vpnresellers"
+            v.fzr_kind = "vpn"
+            v.fzr_a = str(days)   # срок подписки (дней)
+            v.fzr_b = "vless"     # протокол
+            await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
+    await message.answer(
+        f"✅ Источник: VPNresellers · срок {days} дн.", reply_markup=kb.as_markup()
+    )
 
 
 @router.callback_query(F.data.startswith("a_addvarf:"))

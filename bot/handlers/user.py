@@ -16,6 +16,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
+    LinkPreviewOptions,
     Message,
     ReplyKeyboardRemove,
 )
@@ -252,12 +253,15 @@ async def _render_quantity(
         in_stock = await stock_service.available_count(session, variant_id)
         balance = await get_balance(session, call.from_user.id)
         ondemand = variant.source == "fazercard"
+        is_vpn = variant.source == "vpnresellers"
         live = None
         if ondemand:
             fz = await catalog_service.fazercard_stock(fzr, [variant])
             live = fz.get(variant.id)  # int или None (неизвестно)
 
-    if ondemand:
+    if is_vpn:
+        avail = 1  # VPN: один аккаунт за покупку (кол-во не выбирается)
+    elif ondemand:
         # Неизвестный сток трактуем как доступный (ограничим общим капом).
         avail = MAX_QTY_CAP if live is None else live
     else:
@@ -533,7 +537,7 @@ async def cb_topup_confirm(
 
 @router.callback_query(F.data.startswith("confirm:"))
 async def cb_confirm(
-    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient, vpn=None
 ) -> None:
     _, vid, n = call.data.split(":", 2)
     variant_id, qty = int(vid), int(n)
@@ -543,6 +547,9 @@ async def cb_confirm(
         if not variant or not variant.is_active:
             await call.answer("Недоступно", show_alert=True)
             return
+        is_vpn = variant.source == "vpnresellers"
+        if is_vpn:
+            qty = 1
         unit_price = price_rub_value(variant, config.default_markup_percent)
         await order_service.ensure_user(
             session,
@@ -558,6 +565,8 @@ async def cb_confirm(
                 unit_price=unit_price,
                 quantity=qty,
                 fzr=fzr,
+                vpn=vpn,
+                public_base_url=config.public_base_url,
             )
         except InsufficientBalance:
             await session.rollback()
@@ -622,6 +631,17 @@ async def cb_confirm(
             reply_markup=kb.after_purchase_kb(),
         )
         await call.answer("Оформляем ⏳")
+        return
+
+    if is_vpn:
+        # VPN: выдаём ссылку-подписку (кликабельна) + инструкцию по подключению.
+        link = codes[0] if codes else (order.delivery_code or "")
+        await call.message.answer(
+            texts.VPN_DELIVERED.format(link=link),
+            reply_markup=kb.order_done_kb(order_id, variant_id),
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        )
+        await call.answer("Готово ✅")
         return
 
     codes_text = "\n".join(f"<code>{c}</code>" for c in codes)

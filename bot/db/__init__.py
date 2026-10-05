@@ -11,6 +11,7 @@ from .models import (
     ReferralEarning,
     Review,
     Setting,
+    VpnSubscription,
     StockItem,
     StockStatus,
     TopUp,
@@ -37,4 +38,5 @@ __all__ = [
     "Review",
     "MenuButton",
     "ReferralEarning",
+    "VpnSubscription",
 ]

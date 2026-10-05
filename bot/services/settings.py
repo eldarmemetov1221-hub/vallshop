@@ -20,6 +20,10 @@ CANCEL_TEXT = "orders_cancel_text"   # текст покупателю при р
 # Курс USDT→₽ (рубли за 1 USDT). Задаётся администратором.
 USDT_RATE = "usdt_rate"
 
+# VPN (VPNresellers): список server_id через запятую + протокол.
+VPN_SERVER_IDS = "vpn_server_ids"
+VPN_PROTOCOL = "vpn_protocol"  # пока vless
+
 # Реферальная программа
 REF_ENABLED = "ref_enabled"              # "1"/"0"
 REF_PERCENT = "ref_percent"              # процент с покупок, напр. "5"

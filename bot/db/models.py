@@ -105,6 +105,9 @@ class Product(Base):
     icon_emoji_id: Mapped[Optional[str]] = mapped_column(String(32))
     # Своя картинка-баннер категории (Telegram file_id). None — общий баннер.
     banner_file_id: Mapped[Optional[str]] = mapped_column(String(255))
+    # Оформление кнопки категории в каталоге.
+    button_style: Mapped[Optional[str]] = mapped_column(String(16))   # primary/success/danger/None
+    full_width: Mapped[bool] = mapped_column(Boolean, default=False)   # кнопка на всю строку
     # Настраиваемые тексты (наследуются номиналами). None = наследовать/дефолт,
     # "" = скрыть. pending_text — строка «оформляем…», delivered_text — сообщение
     # об успешной выдаче на аккаунт (без кода).
@@ -333,6 +336,23 @@ class ReferralEarning(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     # "credited" | "reversed"
     status: Mapped[str] = mapped_column(String(16), default="credited")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class VpnSubscription(Base):
+    """Выданная VPN-подписка (VPNresellers): токен → base64-подписка."""
+
+    __tablename__ = "vpn_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    order_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    account_id: Mapped[Optional[str]] = mapped_column(String(64))
+    username: Mapped[Optional[str]] = mapped_column(String(64))
+    # Готовая подписка (base64 из vless://), отдаётся на /sub/<token>.
+    config_b64: Mapped[Optional[str]] = mapped_column(Text)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

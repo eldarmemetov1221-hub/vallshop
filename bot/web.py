@@ -52,6 +52,18 @@ def build_app(
         from . import legal
         return web.Response(text=legal.privacy_html(config), content_type="text/html")
 
+    async def vpn_sub(request: web.Request) -> web.Response:
+        """Подписка VPN: отдаёт base64-список vless:// для клиентов (Happ и т.п.)."""
+        token = request.match_info.get("token", "")
+        from .db.models import VpnSubscription
+        async with db.session() as session:
+            sub = await session.scalar(
+                select(VpnSubscription).where(VpnSubscription.token == token)
+            )
+            body = sub.config_b64 if sub and sub.config_b64 else ""
+        # Стандартный формат подписки: тело = base64 из строк конфигов.
+        return web.Response(text=body, content_type="text/plain")
+
     async def bolt_webhook(request: web.Request) -> web.Response:
         raw = await request.read()
         if not provider.verify_webhook(raw, dict(request.headers)):
@@ -70,6 +82,7 @@ def build_app(
     app.router.add_get("/terms", offer_page)   # алиас
     app.router.add_get("/agreement", agreement_page)
     app.router.add_get("/privacy", privacy_page)
+    app.router.add_get("/sub/{token}", vpn_sub)
     # Принимаем вебхук на нескольких путях — на случай, если в кабинете
     # BoltUtil указан другой (например /bolt/callback).
     for path in ("/bolt/webhook", "/bolt/callback", "/callback"):

@@ -103,6 +103,8 @@ async def purchase_from_balance(
     quantity: int,
     fzr: Optional[FazerCardClient] = None,
     topup_fields: Optional[dict] = None,
+    vpn=None,
+    public_base_url: Optional[str] = None,
 ) -> tuple[Order, list[str]]:
     """Купить quantity единиц с баланса и выдать коды.
 
@@ -132,6 +134,12 @@ async def purchase_from_balance(
     # 2) Выдача по источнику.
     if variant.source == "fazercard":
         return await _fulfill_fazercard(session, order, variant, quantity, fzr, topup_fields)
+
+    if variant.source == "vpnresellers":
+        from . import vpn as vpn_service  # ленивый импорт (избегаем цикла)
+        link = await vpn_service.fulfill(session, order, variant, vpn, public_base_url)
+        await referral_service.accrue_for_order(session, order)
+        return order, [link]
 
     # Сток (свой товар / LioGames): резервируем нужное число кодов.
     items = await stock_service.reserve_many(session, variant.id, order.id, quantity)

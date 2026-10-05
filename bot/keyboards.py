@@ -140,10 +140,26 @@ def products_kb(
     columns: int = 1,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    cols = max(1, columns)
+    buf: list = []
+
+    def _flush():
+        if buf:
+            kb.row(*buf)
+            buf.clear()
+
     for p in products:
         icon = getattr(p, "icon_emoji_id", None) or EMOJI["product"]
-        kb.add(_b(p.title, callback_data=f"prod:{p.id}", style="primary", icon=icon))
-    kb.adjust(max(1, columns))
+        style = getattr(p, "button_style", None) or "primary"
+        btn = _b(p.title, callback_data=f"prod:{p.id}", style=style, icon=icon)
+        if getattr(p, "full_width", False) or cols <= 1:
+            _flush()
+            kb.row(btn)
+        else:
+            buf.append(btn)
+            if len(buf) >= cols:
+                _flush()
+    _flush()
     kb.row(_b(back_text, callback_data=back, icon=EMOJI["back"]))
     return kb.as_markup()
 

@@ -69,6 +69,31 @@ async def _migrate_to_rub(db: Database, rate) -> None:
     log.info("Балансы сконвертированы в рубли по курсу %s", rate)
 
 
+async def _seed_vpn_category(db: Database) -> None:
+    """Разово создать категорию «VPN | VallShop» (красная, на всю строку)."""
+    from .db.models import Product
+    from .services import menu as _m  # noqa: F401 (не нужен, но держим стиль)
+    from .services import settings as settings_service
+
+    async with db.session() as session:
+        if await settings_service.get(session, "vpn_category_seeded"):
+            return
+        p = Product(
+            game="VPN",
+            title="VPN | VallShop",
+            parent_id=None,
+            is_active=True,
+            icon_emoji_id="6300855020531225173",
+            button_style="danger",
+            full_width=True,
+            sort_order=100,  # чтобы была ниже других категорий
+        )
+        session.add(p)
+        await settings_service.set(session, "vpn_category_seeded", "1")
+        await session.commit()
+    log.info("Категория «VPN | VallShop» создана")
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -84,10 +109,13 @@ async def main() -> None:
     await menu_service.load(db)  # кэш оформления меню
     await rates_service.load(db)  # курс USDT→₽
     await _migrate_to_rub(db, rates_service.get_rate())  # разовая конвертация балансов
+    await _seed_vpn_category(db)  # разовое создание категории «VPN | VallShop»
 
     provider = build_provider(config)
     liog = LioGamesClient.from_env()
     fzr = FazerCardClient.from_env()
+    from vpnresellers import VPNResellersClient
+    vpn = VPNResellersClient.from_env()
 
     bot = Bot(
         token=config.bot_token,
@@ -101,6 +129,7 @@ async def main() -> None:
     dp["provider"] = provider
     dp["liog"] = liog
     dp["fzr"] = fzr
+    dp["vpn"] = vpn
 
     from .middlewares import BlockedMiddleware
     dp.message.middleware(BlockedMiddleware())
