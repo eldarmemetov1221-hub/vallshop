@@ -289,6 +289,34 @@ class FazerCardClient:
         body = {"telegram_username": telegram_username, "months": int(months)}
         return self._request("POST", "/api/v2/telegram/premium/buy", json_body=body, idempotency_key=idempotency_key)
 
+    # ── Пополнение Steam по логину (свободная сумма) ───────────────────────────
+    def steam_rates(self) -> Dict[str, Any]:
+        """GET /steam-topup/rates — курсы RUB/UAH/KZT к USD и лимиты."""
+        return self._request("GET", "/api/v2/steam-topup/rates")
+
+    def steam_check_login(self, steam_login: str) -> Dict[str, Any]:
+        """POST /steam-topup/check-login — можно ли пополнить этот логин."""
+        return self._request(
+            "POST", "/api/v2/steam-topup/check-login",
+            json_body={"steamLogin": steam_login},
+        )
+
+    def order_steam_topup(
+        self, *, steam_login: str, amount, currency: str, idempotency_key: Optional[str] = None
+    ):
+        """POST /steam-topup/order — пополнить Steam-кошелёк по логину.
+
+        amount — сумма в выбранной валюте (currency: USD|RUB|UAH|KZT).
+        """
+        body = {
+            "steamLogin": steam_login,
+            "currency": str(currency).upper(),
+            "amount": str(amount),
+        }
+        return self._request(
+            "POST", "/api/v2/steam-topup/order", json_body=body, idempotency_key=idempotency_key
+        )
+
     def get_order(self, order_id: str) -> Dict[str, Any]:
         return self._request("GET", f"/api/v2/orders/{order_id}")
 
@@ -349,6 +377,18 @@ class FazerCardClient:
 
     # ── Mock ─────────────────────────────────────────────────────────────────
     def _mock(self, method, path, params, json_body):
+        # Steam-пополнение (ветки раньше общего "/order").
+        if path.endswith("/steam-topup/rates"):
+            return {
+                "ok": True,
+                "rates": {"USD": "1", "RUB": "83.5", "KZT": "480", "UAH": "41"},
+                "limits": {"RUB": {"min": "12.54", "max": "83581.97"}},
+            }
+        if path.endswith("/steam-topup/check-login"):
+            login = (json_body or {}).get("steamLogin") or ""
+            return {"ok": True, "valid": bool(login) and login.lower() != "invalid"}
+        if path.endswith("/steam-topup/order"):
+            return {"ok": True, "order": {"id": "steam-mock", "status": "completed"}}
         if path.endswith("/balance"):
             return {"ok": True, "balance": "100.00", "currency": "USD"}
         if path.endswith("/giftcards/cards"):

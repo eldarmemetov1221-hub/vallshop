@@ -71,7 +71,12 @@ async def sales_stats(
                 func.count(Order.id),
                 func.coalesce(func.sum(Order.quantity), 0),
                 func.coalesce(func.sum(Order.price_usd * Order.quantity), 0),
-                func.coalesce(func.sum(Variant.cost_usd * Order.quantity), 0),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(Order.cost_usd, Variant.cost_usd * Order.quantity)
+                    ),
+                    0,
+                ),
             )
             .select_from(Order)
             .join(Variant, Variant.id == Order.variant_id)

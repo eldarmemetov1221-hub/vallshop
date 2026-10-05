@@ -65,6 +65,7 @@ class Database:
             ("products", "banner_file_id", "VARCHAR(255)"),
             ("orders", "fields_json", "TEXT"),
             ("orders", "fail_reason", "VARCHAR(255)"),
+            ("orders", "cost_usd", "NUMERIC(12,4)"),
             ("users", "referred_by", "INTEGER"),
             ("users", "ref_balance_usdt", "NUMERIC(12,2) NOT NULL DEFAULT 0"),
             ("users", "ref_balance_rub", "NUMERIC(12,2) NOT NULL DEFAULT 0"),

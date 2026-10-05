@@ -29,6 +29,7 @@ from ..services import menu as menu_service
 from ..services import notify as notify_service
 from ..services import referral as referral_service
 from ..services import orders as order_service
+from ..services import steam as steam_service
 from ..services import stock as stock_service
 from ..services.balance import get_balance
 from ..services.orders import InsufficientBalance, OutOfStock, SupplierError
@@ -47,6 +48,14 @@ MAX_QTY_CAP = 50  # верхний предел количества за одн
 class BuyFlow(StatesGroup):
     """Покупка топапа FazerCard: пошаговый сбор данных игрока."""
     collecting = State()
+    confirming = State()
+
+
+class SteamFlow(StatesGroup):
+    """Пополнение Steam по логину: логин → валюта → сумма → подтверждение."""
+    login = State()
+    currency = State()
+    amount = State()
     confirming = State()
 
 
@@ -141,13 +150,18 @@ async def cb_catalog(call: CallbackQuery, db: Database, state: FSMContext) -> No
 
 @router.callback_query(F.data.startswith("prod:"))
 async def cb_product(
-    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient,
+    state: FSMContext,
 ) -> None:
     product_id = int(call.data.split(":", 1)[1])
     async with db.session() as session:
         product = await catalog_service.get_product(session, product_id)
         if not product:
             await call.answer("Товар не найден", show_alert=True)
+            return
+        # Спец-кнопка «Пополнить Steam» — свой флоу (логин → валюта → сумма).
+        if product.game == "STEAM_TOPUP":
+            await _start_steam(call, db, state)
             return
         parent_id = product.parent_id
         children = await catalog_service.list_children(session, product_id)
@@ -212,6 +226,13 @@ async def cb_variant(
         if not variant or not variant.is_active:
             await call.answer("Недоступно", show_alert=True)
             return
+        is_steam = variant.source == "fazercard" and variant.fzr_kind == "steam"
+    if is_steam:
+        # Steam-пополнение — свой флоу (логин → валюта → сумма).
+        await _start_steam(call, db, state)
+        return
+    async with db.session() as session:
+        variant = await catalog_service.get_variant(session, variant_id)
         price = sale_price(variant, config.default_markup_percent)
         in_stock = await stock_service.available_count(session, variant_id)
         ondemand = variant.source == "fazercard"
@@ -306,6 +327,10 @@ async def cb_buy(
     async with db.session() as session:
         variant = await catalog_service.get_variant(session, variant_id)
         needs_fields = bool(variant and variant.is_active and _needs_fields(variant))
+        is_steam = bool(variant and variant.source == "fazercard" and variant.fzr_kind == "steam")
+    if is_steam:
+        await _start_steam(call, db, state)
+        return
     if needs_fields:
         await _start_topup(call, config, fzr, state, variant)
         return
@@ -529,6 +554,234 @@ async def cb_topup_confirm(
         await call.message.answer(
             texts.PURCHASE_PENDING.format(
                 item=item_name, qty=1, total=total_str, balance=bal_str, note=note
+            ),
+            reply_markup=kb.after_purchase_kb(),
+        )
+    await call.answer("Готово ✅")
+
+
+# ── Пополнение Steam по логину (свободная сумма, 4 валюты) ────────────────────
+def _steam_cancel_kb() -> InlineKeyboardBuilder:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="catalog"))
+    return b.as_markup()
+
+
+def _steam_currency_kb() -> InlineKeyboardBuilder:
+    b = InlineKeyboardBuilder()
+    row = [
+        InlineKeyboardButton(text=steam_service.CURRENCY_LABELS[c], callback_data=f"scur:{c}")
+        for c in steam_service.CURRENCIES
+    ]
+    b.row(*row[:2])
+    b.row(*row[2:])
+    b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="catalog"))
+    return b.as_markup()
+
+
+def _fmt_amount(amount) -> str:
+    d = Decimal(amount)
+    if d == d.to_integral_value():
+        return str(int(d))
+    return f"{d.normalize()}"
+
+
+async def _steam_variant(session):
+    from sqlalchemy import select
+    from ..db.models import Product, Variant
+    pid = await session.scalar(select(Product.id).where(Product.game == "STEAM_TOPUP"))
+    if not pid:
+        return None
+    return await session.scalar(
+        select(Variant)
+        .where(Variant.product_id == pid, Variant.is_active.is_(True))
+        .order_by(Variant.sort_order)
+    )
+
+
+async def _start_steam(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    async with db.session() as session:
+        variant = await _steam_variant(session)
+    if not variant:
+        await call.answer("Пополнение Steam сейчас недоступно", show_alert=True)
+        return
+    await state.set_state(SteamFlow.login)
+    await state.update_data(svid=variant.id)
+    await call.message.answer(texts.STEAM_ASK_LOGIN, reply_markup=_steam_cancel_kb())
+    await call.answer()
+
+
+@router.message(SteamFlow.login)
+async def msg_steam_login(
+    message: Message, fzr: FazerCardClient, state: FSMContext
+) -> None:
+    login = (message.text or "").strip()
+    if not login:
+        await message.answer("Введите логин Steam")
+        return
+    ok = True
+    try:
+        res = await asyncio.to_thread(fzr.steam_check_login, login)
+        if isinstance(res, dict) and "valid" in res:
+            ok = bool(res.get("valid"))
+    except Exception:  # noqa: BLE001 — если проверка недоступна, не блокируем
+        ok = True
+    if not ok:
+        await message.answer(texts.STEAM_LOGIN_INVALID)
+        return
+    await state.update_data(login=login)
+    await state.set_state(SteamFlow.currency)
+    await message.answer(
+        texts.STEAM_ASK_CURRENCY.format(login=login), reply_markup=_steam_currency_kb()
+    )
+
+
+@router.callback_query(SteamFlow.currency, F.data.startswith("scur:"))
+async def cb_steam_currency(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    cur = call.data.split(":", 1)[1].upper()
+    if cur not in steam_service.CURRENCIES:
+        await call.answer("Валюта недоступна", show_alert=True)
+        return
+    data = await state.get_data()
+    async with db.session() as session:
+        lo, hi = await steam_service.get_limits(session)
+    await state.update_data(currency=cur)
+    await state.set_state(SteamFlow.amount)
+    await call.message.answer(
+        texts.STEAM_ASK_AMOUNT.format(
+            login=data.get("login", ""), currency=cur,
+            min=texts.rub(lo), max=texts.rub(hi),
+        ),
+        reply_markup=_steam_cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(SteamFlow.amount)
+async def msg_steam_amount(
+    message: Message, db: Database, fzr: FazerCardClient, state: FSMContext
+) -> None:
+    raw = (message.text or "").strip().replace(",", ".").replace(" ", "")
+    try:
+        amount = Decimal(raw)
+    except Exception:  # noqa: BLE001
+        amount = None
+    if amount is None or amount <= 0:
+        await message.answer(texts.STEAM_AMOUNT_BAD)
+        return
+    data = await state.get_data()
+    currency, login = data.get("currency", "RUB"), data.get("login", "")
+    async with db.session() as session:
+        fzr_rates = await steam_service.get_fzr_rates(fzr)
+        markup = await steam_service.get_markup(session)
+        lo, hi = await steam_service.get_limits(session)
+        balance = await get_balance(session, message.from_user.id)
+    price = steam_service.price_rub(amount, currency, fzr_rates, markup=markup)
+    c_usd = steam_service.cost_usd(amount, currency, fzr_rates)
+    if price < lo or price > hi:
+        await message.answer(
+            texts.STEAM_AMOUNT_RANGE.format(
+                min=texts.rub(lo), max=texts.rub(hi), price=texts.rub(price)
+            )
+        )
+        return
+    amt_str = _fmt_amount(amount)
+    await state.update_data(amount=amt_str, price=str(price), cost_usd=str(c_usd))
+    await state.set_state(SteamFlow.confirming)
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text=f"✅ Оплатить {texts.rub(price)}", callback_data="sbuy"))
+    b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="catalog"))
+    await message.answer(
+        texts.STEAM_CONFIRM.format(
+            login=login, amount=amt_str, currency=currency,
+            price=texts.rub(price), balance=texts.rub(balance),
+        ),
+        reply_markup=b.as_markup(),
+    )
+
+
+@router.callback_query(SteamFlow.confirming, F.data == "sbuy")
+async def cb_steam_buy(
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    vid = data.get("svid")
+    login, currency = data.get("login", ""), data.get("currency", "RUB")
+    amount = data.get("amount", "")
+    price = Decimal(data.get("price", "0"))
+    cost_usd = data.get("cost_usd", "0")
+    async with db.session() as session:
+        variant = await catalog_service.get_variant(session, vid)
+        if not variant or not variant.is_active:
+            await state.clear()
+            await call.answer("Недоступно", show_alert=True)
+            return
+        await order_service.ensure_user(
+            session, call.from_user.id, call.from_user.username, call.from_user.full_name
+        )
+        try:
+            order, _codes = await order_service.purchase_from_balance(
+                session, user_id=call.from_user.id, variant=variant,
+                unit_price=price, quantity=1, fzr=fzr,
+                topup_fields={
+                    "steam_login": login, "amount": amount,
+                    "currency": currency, "_cost_usd": cost_usd,
+                },
+            )
+        except InsufficientBalance:
+            await session.rollback()
+            await state.clear()
+            await call.message.answer(
+                texts.NOT_ENOUGH_BALANCE_MSG, reply_markup=kb.not_enough_balance_kb()
+            )
+            await call.answer()
+            return
+        except SupplierError:
+            await session.rollback()
+            await notify_service.notify_admins(
+                call.message.bot, config.admin_ids,
+                f"⚠️ Поставщик отклонил пополнение Steam (логин <b>{login}</b>). "
+                "Деньги покупателю не списаны.",
+            )
+            await call.answer(
+                "😔 Поставщик временно недоступен, деньги не списаны.", show_alert=True
+            )
+            return
+        order.fields_json = json.dumps(
+            [
+                {"label": "Логин Steam", "value": login},
+                {"label": "Сумма", "value": f"{amount} {currency}"},
+            ],
+            ensure_ascii=False,
+        )
+        status = order.status
+        order_id = order.id
+        pending_note = await catalog_service.resolve_text(
+            session, variant, "pending_text", texts.PENDING_NOTE_DEFAULT
+        )
+        await session.commit()
+        balance = await get_balance(session, call.from_user.id)
+
+    await state.clear()
+    if status == OrderStatus.NEEDS_ACTION:
+        await notify_service.notify_admins(
+            call.message.bot, config.admin_ids,
+            f"❗️ Пополнение Steam #{order_id} (логин <b>{login}</b>) требует ручной обработки.\n"
+            "Откройте «Админ-панель → Текущие заказы → Не выполненные».",
+        )
+    done_kb = kb.order_done_kb(order_id, vid)
+    if status == OrderStatus.COMPLETED:
+        await call.message.answer(
+            texts.STEAM_DELIVERED.format(login=login, amount=amount, currency=currency),
+            reply_markup=done_kb,
+        )
+    else:
+        note = f"\n\n{pending_note}" if pending_note else ""
+        await call.message.answer(
+            texts.PURCHASE_PENDING.format(
+                item="Пополнение Steam", qty=1, total=texts.rub(price),
+                balance=texts.rub(balance), note=note,
             ),
             reply_markup=kb.after_purchase_kb(),
         )

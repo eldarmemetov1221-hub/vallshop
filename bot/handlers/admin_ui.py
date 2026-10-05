@@ -76,6 +76,9 @@ class AdminUI(StatesGroup):
     set_src_lio = State()
     set_src_vpn = State()
     vpn_servers = State()
+    steam_markup = State()
+    steam_min = State()
+    steam_max = State()
     fzr_search = State()
     fzr_price = State()
 
@@ -132,6 +135,7 @@ def _panel_kb() -> InlineKeyboardMarkup:
     kb.row(_btn("⭐ Отзывы", "arv_home"), _btn("📊 Статистика", "st_home"))
     kb.row(_btn("🎨 Оформление", "ap_home"), _btn("👥 Рефералы", "rf_home"))
     kb.row(_btn("💱 Курс USDT→₽", "a_rate"), _btn("🛡 VPN", "vpn_home"))
+    kb.row(_btn("💳 Пополнение Steam", "steam_home"))
     kb.row(_btn("⬅️ Меню", "menu"))
     return kb.as_markup()
 
@@ -426,6 +430,122 @@ async def msg_vpn_servers(message: Message, db: Database, state: FSMContext, vpn
     await message.answer(
         f"✅ Серверы подписки: {', '.join(ids)}.{tail}", reply_markup=kb.as_markup()
     )
+
+
+# ── Пополнение Steam (наценка, лимиты заказа) ──────────────────────────────────
+@router.callback_query(F.data == "steam_home")
+async def cb_steam_home(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    await state.clear()
+    from ..services import steam as steam_service
+    async with db.session() as session:
+        markup = await steam_service.get_markup(session)
+        lo, hi = await steam_service.get_limits(session)
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn(f"📈 Наценка: {_fmt_rub(markup)}%", "steam_markup"))
+    kb.row(
+        _btn(f"⬇️ Мин: {_fmt_rub(lo)} ₽", "steam_min"),
+        _btn(f"⬆️ Макс: {_fmt_rub(hi)} ₽", "steam_max"),
+    )
+    kb.row(_btn("⬅️ Назад", "a_home"))
+    await call.message.edit_text(
+        "💳 <b>Пополнение Steam</b>\n\n"
+        f"Наценка: <b>{_fmt_rub(markup)}%</b>\n"
+        f"Лимит заказа (к оплате): <b>{_fmt_rub(lo)} — {_fmt_rub(hi)} ₽</b>\n\n"
+        "Клиент вводит сумму на Steam в своей валюте (USD/RUB/KZT/UAH); цена в ₽ "
+        "считается от себестоимости FazerCards по их курсу + наценка.",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+def _parse_pos_decimal(text: Optional[str], *, allow_zero: bool = False) -> Optional[Decimal]:
+    raw = (text or "").strip().replace(",", ".")
+    try:
+        v = Decimal(raw)
+    except InvalidOperation:
+        return None
+    if v < 0 or (v == 0 and not allow_zero):
+        return None
+    return v
+
+
+@router.callback_query(F.data == "steam_markup")
+async def cb_steam_markup(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminUI.steam_markup)
+    await call.message.edit_text(
+        "📈 Пришлите наценку в % (например <code>5</code>).",
+        reply_markup=_cancel_kb("steam_home"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.steam_markup)
+async def msg_steam_markup(message: Message, db: Database, state: FSMContext) -> None:
+    val = _parse_pos_decimal(message.text, allow_zero=True)
+    if val is None:
+        await message.answer("Введите число ≥ 0, например 5")
+        return
+    from ..services import settings as settings_service
+    async with db.session() as session:
+        await settings_service.set(session, settings_service.STEAM_MARKUP, str(val))
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К Steam", "steam_home"))
+    await message.answer(f"✅ Наценка Steam: {_fmt_rub(val)}%", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data == "steam_min")
+async def cb_steam_min(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminUI.steam_min)
+    await call.message.edit_text(
+        "⬇️ Пришлите <b>минимальную</b> сумму заказа к оплате, ₽ (например <code>50</code>).",
+        reply_markup=_cancel_kb("steam_home"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.steam_min)
+async def msg_steam_min(message: Message, db: Database, state: FSMContext) -> None:
+    val = _parse_pos_decimal(message.text)
+    if val is None:
+        await message.answer("Введите положительное число, например 50")
+        return
+    from ..services import settings as settings_service
+    async with db.session() as session:
+        await settings_service.set(session, settings_service.STEAM_MIN_RUB, str(val))
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К Steam", "steam_home"))
+    await message.answer(f"✅ Мин. заказ Steam: {_fmt_rub(val)} ₽", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data == "steam_max")
+async def cb_steam_max(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminUI.steam_max)
+    await call.message.edit_text(
+        "⬆️ Пришлите <b>максимальную</b> сумму заказа к оплате, ₽ (например <code>50000</code>).\n"
+        "Удобно ограничить исходя из вашего баланса у поставщика.",
+        reply_markup=_cancel_kb("steam_home"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.steam_max)
+async def msg_steam_max(message: Message, db: Database, state: FSMContext) -> None:
+    val = _parse_pos_decimal(message.text)
+    if val is None:
+        await message.answer("Введите положительное число, например 50000")
+        return
+    from ..services import settings as settings_service
+    async with db.session() as session:
+        await settings_service.set(session, settings_service.STEAM_MAX_RUB, str(val))
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К Steam", "steam_home"))
+    await message.answer(f"✅ Макс. заказ Steam: {_fmt_rub(val)} ₽", reply_markup=kb.as_markup())
 
 
 # ── Товары ───────────────────────────────────────────────────────────────────

@@ -24,6 +24,11 @@ USDT_RATE = "usdt_rate"
 VPN_SERVER_IDS = "vpn_server_ids"
 VPN_PROTOCOL = "vpn_protocol"  # пока vless
 
+# Пополнение Steam по логину (FazerCards)
+STEAM_MARKUP = "steam_markup_percent"   # наценка %, напр. "5"
+STEAM_MIN_RUB = "steam_min_rub"         # мин. сумма заказа клиенту, ₽
+STEAM_MAX_RUB = "steam_max_rub"         # макс. сумма заказа клиенту, ₽
+
 # Реферальная программа
 REF_ENABLED = "ref_enabled"              # "1"/"0"
 REF_PERCENT = "ref_percent"              # процент с покупок, напр. "5"

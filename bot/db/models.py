@@ -234,6 +234,9 @@ class Order(Base):
     fields_json: Mapped[Optional[str]] = mapped_column(Text)
     # Причина ошибки выдачи (для раздела «Не выполненные»).
     fail_reason: Mapped[Optional[str]] = mapped_column(String(255))
+    # Фактическая себестоимость заказа в USD (для товаров с плавающей закупкой,
+    # напр. Steam-пополнение). None — считать по variant.cost_usd × quantity.
+    cost_usd: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

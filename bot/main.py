@@ -94,6 +94,47 @@ async def _seed_vpn_category(db: Database) -> None:
     log.info("Категория «VPN | VallShop» создана")
 
 
+async def _seed_steam_category(db: Database) -> None:
+    """Разово создать кнопку «Пополнить Steam» (товар + номинал-сервис).
+
+    Товар с game="STEAM_TOPUP" — спец-кнопка: тап ведёт в свой флоу
+    (логин → валюта → сумма). Номинал нужен для привязки заказа и выдачи
+    (source="fazercard", fzr_kind="steam").
+    """
+    from .db.models import Product, Variant
+    from .services import settings as settings_service
+
+    async with db.session() as session:
+        if await settings_service.get(session, "steam_category_seeded"):
+            return
+        p = Product(
+            game="STEAM_TOPUP",
+            title="Пополнить Steam",
+            parent_id=None,
+            is_active=True,
+            icon_emoji_id="5372817526801589587",
+            button_style="primary",
+            full_width=True,
+            sort_order=90,  # выше VPN (100), ниже обычных категорий
+        )
+        session.add(p)
+        await session.flush()
+        session.add(Variant(
+            product_id=p.id,
+            title="Пополнение Steam",
+            liog_product_id=0,
+            liog_variation_id=-1,
+            cost_usd=0,
+            source="fazercard",
+            fzr_kind="steam",
+            fzr_a="RUB",  # валюта по умолчанию (клиент выбирает при покупке)
+            is_active=True,
+        ))
+        await settings_service.set(session, "steam_category_seeded", "1")
+        await session.commit()
+    log.info("Кнопка «Пополнить Steam» создана")
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -110,6 +151,7 @@ async def main() -> None:
     await rates_service.load(db)  # курс USDT→₽
     await _migrate_to_rub(db, rates_service.get_rate())  # разовая конвертация балансов
     await _seed_vpn_category(db)  # разовое создание категории «VPN | VallShop»
+    await _seed_steam_category(db)  # разовое создание кнопки «Пополнить Steam»
 
     provider = build_provider(config)
     liog = LioGamesClient.from_env()

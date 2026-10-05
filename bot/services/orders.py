@@ -13,7 +13,7 @@ import asyncio
 import re
 import uuid
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -173,10 +173,17 @@ async def _fulfill_fazercard(
 
     order.supplier = "fazercard"
     order.status = OrderStatus.FULFILLING
-    await session.flush()
 
     kind = variant.fzr_kind
     fields = topup_fields or {}
+
+    # Steam-пополнение: себестоимость плавающая — сохраняем её в заказ.
+    if kind == "steam" and fields.get("_cost_usd"):
+        try:
+            order.cost_usd = Decimal(str(fields["_cost_usd"]))
+        except (InvalidOperation, ValueError, TypeError):
+            pass
+    await session.flush()
 
     def _call():
         # Telegram Stars / Premium — спец-эндпоинты с получателем (username).
@@ -213,6 +220,16 @@ async def _fulfill_fazercard(
                 category_id=variant.fzr_a, offer_id=variant.fzr_b,
                 fields=fields, idempotency_key=order.client_ref,
             )
+        if kind == "steam":
+            login = (fields.get("steam_login") or "").strip()
+            amount = fields.get("amount")
+            currency = (fields.get("currency") or "RUB").upper()
+            if not login or not amount:
+                raise SupplierError("Не указан логин Steam или сумма")
+            return fzr.order_steam_topup(
+                steam_login=login, amount=amount, currency=currency,
+                idempotency_key=order.client_ref,
+            )
         raise SupplierError(f"Неизвестный тип FazerCard: {kind}")
 
     try:
@@ -243,8 +260,8 @@ async def _fulfill_fazercard(
         if codes:
             order.delivery_code = "\n".join(codes)
             order.status = OrderStatus.COMPLETED
-        elif variant.fzr_kind == "topup" or _no_code_delivery(variant):
-            # Топап / Telegram Stars|Premium — зачисляется на аккаунт, кода нет.
+        elif variant.fzr_kind in ("topup", "steam") or _no_code_delivery(variant):
+            # Топап / Steam / Telegram Stars|Premium — зачисляется на аккаунт, кода нет.
             order.status = OrderStatus.COMPLETED
         # иначе (ключ/карта без кода) — остаёмся FULFILLING, коды дотянет поллер
         await session.flush()
@@ -286,7 +303,7 @@ async def poll_fazercard(
             order.status = OrderStatus.COMPLETED
         else:
             variant = await session.get(Variant, order.variant_id)
-            if variant and (variant.fzr_kind == "topup" or _no_code_delivery(variant)):
+            if variant and (variant.fzr_kind in ("topup", "steam") or _no_code_delivery(variant)):
                 order.status = OrderStatus.COMPLETED  # зачислено на аккаунт/username
             else:
                 order.status = OrderStatus.FAILED  # ключ/карта без кода — ошибка
