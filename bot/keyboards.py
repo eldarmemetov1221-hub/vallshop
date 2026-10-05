@@ -175,7 +175,11 @@ def variants_kb(
     kb = InlineKeyboardBuilder()
     for v in variants:
         price = prices[v.id]  # уже отформатированная строка (₽ / $)
-        if getattr(v, "source", "stock") == "fazercard":
+        src = getattr(v, "source", "stock")
+        if src == "vpnresellers":
+            # VPN: выдача мгновенная от провайдера, своего стока нет — «под заказ» не показываем.
+            note = " · ✅ в наличии"
+        elif src == "fazercard":
             st = stock.get(v.id)
             if st is None:
                 note = " · ✅ в наличии"

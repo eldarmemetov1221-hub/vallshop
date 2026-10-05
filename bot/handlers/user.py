@@ -236,12 +236,15 @@ async def cb_variant(
         price = sale_price(variant, config.default_markup_percent)
         in_stock = await stock_service.available_count(session, variant_id)
         ondemand = variant.source == "fazercard"
+        is_vpn = variant.source == "vpnresellers"
         back = f"prod:{variant.product_id}"
         if ondemand:
             fz = await catalog_service.fazercard_stock(fzr, [variant])
             in_stock = fz.get(variant.id)  # int (реальный сток) или None (неизвестно)
 
-    if ondemand:
+    if is_vpn:
+        note = "в наличии ✅ (выдача сразу после оплаты)"
+    elif ondemand:
         if in_stock is None:
             note = "в наличии ✅ (выдача за пару минут)"
         elif in_stock > 0:
