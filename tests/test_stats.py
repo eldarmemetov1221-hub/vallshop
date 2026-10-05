@@ -50,6 +50,17 @@ async def test_sales_and_profit(db):
         assert us["total"] == 1 and us["new"] == 1
 
 
+@pytest.mark.asyncio
+async def test_total_balance(db):
+    async with db.session() as s:
+        s.add(User(id=1, balance=Decimal("290.00")))
+        s.add(User(id=2, balance=Decimal("10.50")))
+        s.add(User(id=3))  # баланс 0 по умолчанию
+        await s.commit()
+    async with db.session() as s:
+        assert await stats_service.total_balance(s) == Decimal("300.50")
+
+
 def test_preset_labels():
     _, _, lbl = stats_service.preset_range("today")
     assert lbl == "Сегодня"

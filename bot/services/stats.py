@@ -51,6 +51,14 @@ async def users_stats(
     return {"total": int(total), "new": int(new)}
 
 
+async def total_balance(session: AsyncSession) -> Decimal:
+    """Суммарный баланс всех клиентов (₽, текущий снимок — не зависит от периода)."""
+    total = await session.scalar(
+        select(func.coalesce(func.sum(User.balance), 0))
+    )
+    return Decimal(total or 0)
+
+
 async def sales_stats(
     session: AsyncSession, start: Optional[datetime], end: datetime
 ) -> dict:

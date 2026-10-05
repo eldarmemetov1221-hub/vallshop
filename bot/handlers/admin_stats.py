@@ -66,18 +66,22 @@ def _kb() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def _fmt(label: str, u: dict, s: dict, cur: str) -> str:
+def _fmt(label: str, u: dict, s: dict, cur: str, balances=None) -> str:
     from .. import texts
     cost_usd = s.get("cost_usd")
     cost_line = texts.rub(s['cost'])
     if cost_usd:
         cost_line += f" (≈ {texts.money(cost_usd)})"
+    bal_line = ""
+    if balances is not None:
+        bal_line = f"Сумма балансов клиентов: <b>{texts.rub(balances)}</b>\n"
     return (
         f"📊 <b>Статистика</b>\n"
         f"Период: <b>{label}</b>\n\n"
         f"👥 <b>Пользователи</b>\n"
         f"Всего: <b>{u['total']}</b>\n"
-        f"Новых за период: <b>{u['new']}</b>\n\n"
+        f"Новых за период: <b>{u['new']}</b>\n"
+        f"{bal_line}\n"
         f"🛒 <b>Продажи</b>\n"
         f"Заказов: <b>{s['orders']}</b>\n"
         f"Товаров продано: <b>{s['items']}</b>\n"
@@ -91,7 +95,8 @@ async def _render(target, db: Database, config: BotConfig, start, end, label, ed
     async with db.session() as session:
         u = await stats_service.users_stats(session, start, end)
         s = await stats_service.sales_stats(session, start, end)
-    text = _fmt(label, u, s, config.currency)
+        balances = await stats_service.total_balance(session)
+    text = _fmt(label, u, s, config.currency, balances=balances)
     if edit:
         try:
             await target.edit_text(text, reply_markup=_kb())
