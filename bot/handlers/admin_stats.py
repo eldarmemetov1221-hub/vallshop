@@ -16,9 +16,16 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from decimal import Decimal, InvalidOperation
+
+from sqlalchemy import func, select
+
 from ..config import BotConfig
 from ..db import Database
+from ..db.models import User
+from ..services import balance as balance_service
 from ..services import stats as stats_service
+from .. import texts
 
 router = Router()
 
@@ -39,6 +46,9 @@ router.message.filter(IsAdminMsg())
 
 class StatsFlow(StatesGroup):
     custom = State()
+    find_user = State()
+    credit = State()
+    debit = State()
 
 
 def _btn(text: str, data: str) -> InlineKeyboardButton:
@@ -51,6 +61,7 @@ def _kb() -> InlineKeyboardMarkup:
     kb.row(_btn("30 дней", "st:30d"), _btn("Этот месяц", "st:month"))
     kb.row(_btn("Всё время", "st:all"))
     kb.row(_btn("📅 Свой период", "st_custom"))
+    kb.row(_btn("💰 Баланс клиента", "st_bal"))
     kb.row(_btn("⬅️ В админ-панель", "a_home"))
     return kb.as_markup()
 
@@ -142,3 +153,161 @@ async def msg_stats_custom(message: Message, db: Database, config: BotConfig, st
         return
     await state.clear()
     await _render(message, db, config, start, end, label, edit=False)
+
+
+# ── Баланс клиента ─────────────────────────────────────────────────────────────
+async def _find_user(session, raw: str):
+    raw = (raw or "").strip().lstrip("@")
+    if not raw:
+        return None
+    if raw.isdigit():
+        u = await session.get(User, int(raw))
+        if u:
+            return u
+    return await session.scalar(
+        select(User).where(func.lower(User.username) == raw.lower())
+    )
+
+
+async def _bal_card(session, user: User) -> tuple[str, InlineKeyboardMarkup]:
+    who = f"@{user.username}" if user.username else "(без username)"
+    caption = (
+        "💰 <b>Баланс клиента</b>\n\n"
+        f"Пользователь: {who}\n"
+        f"ID: <code>{user.id}</code>\n"
+        f"Баланс: <b>{texts.rub(user.balance)}</b>"
+    )
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        _btn("➕ Пополнить", f"bal_add:{user.id}"),
+        _btn("➖ Уменьшить", f"bal_sub:{user.id}"),
+    )
+    kb.row(_btn("🔄 Обновить", f"bal_show:{user.id}"))
+    kb.row(_btn("🔎 Другой клиент", "st_bal"), _btn("⬅️ Назад", "st_home"))
+    return caption, kb.as_markup()
+
+
+@router.callback_query(F.data == "st_bal")
+async def cb_bal_home(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(StatsFlow.find_user)
+    b = InlineKeyboardBuilder()
+    b.row(_btn("⬅️ Назад", "st_home"))
+    await call.message.edit_text(
+        "💰 <b>Баланс клиента</b>\n\n"
+        "Пришлите <b>@username</b> или <b>ID</b> пользователя "
+        "(свой тоже можно — для теста).",
+        reply_markup=b.as_markup(),
+    )
+    await call.answer()
+
+
+@router.message(StatsFlow.find_user)
+async def msg_find_user(message: Message, db: Database, state: FSMContext) -> None:
+    async with db.session() as session:
+        user = await _find_user(session, message.text or "")
+        if not user:
+            await message.answer("Не найден. Пришлите @username или ID (клиент должен был писать боту).")
+            return
+        caption, markup = await _bal_card(session, user)
+    await state.clear()
+    await message.answer(caption, reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith("bal_show:"))
+async def cb_bal_show(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    await state.clear()
+    uid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        user = await session.get(User, uid)
+        if not user:
+            await call.answer("Не найден", show_alert=True)
+            return
+        caption, markup = await _bal_card(session, user)
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("bal_add:"))
+async def cb_bal_add(call: CallbackQuery, state: FSMContext) -> None:
+    uid = int(call.data.split(":", 1)[1])
+    await state.set_state(StatsFlow.credit)
+    await state.update_data(uid=uid)
+    b = InlineKeyboardBuilder()
+    b.row(_btn("⬅️ Отмена", f"bal_show:{uid}"))
+    await call.message.edit_text(
+        "➕ Пришлите сумму пополнения в рублях (например <code>500</code>).",
+        reply_markup=b.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("bal_sub:"))
+async def cb_bal_sub(call: CallbackQuery, state: FSMContext) -> None:
+    uid = int(call.data.split(":", 1)[1])
+    await state.set_state(StatsFlow.debit)
+    await state.update_data(uid=uid)
+    b = InlineKeyboardBuilder()
+    b.row(_btn("⬅️ Отмена", f"bal_show:{uid}"))
+    await call.message.edit_text(
+        "➖ Пришлите сумму списания в рублях (например <code>100</code>).\n"
+        "Если больше баланса — обнулится.",
+        reply_markup=b.as_markup(),
+    )
+    await call.answer()
+
+
+def _parse_amount(raw: str):
+    try:
+        v = Decimal((raw or "").strip().replace(",", "."))
+        return v if v > 0 else None
+    except InvalidOperation:
+        return None
+
+
+@router.message(StatsFlow.credit)
+async def msg_bal_credit(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    uid = data.get("uid")
+    amount = _parse_amount(message.text or "")
+    if amount is None:
+        await message.answer("Введите положительное число, например 500")
+        return
+    async with db.session() as session:
+        user = await session.get(User, uid)
+        if not user:
+            await state.clear()
+            await message.answer("Пользователь не найден")
+            return
+        await balance_service.credit(session, uid, amount)
+        await session.commit()
+        user = await session.get(User, uid)
+        caption, markup = await _bal_card(session, user)
+    await state.clear()
+    await message.answer(f"✅ Пополнено на {texts.rub(amount)}")
+    await message.answer(caption, reply_markup=markup)
+
+
+@router.message(StatsFlow.debit)
+async def msg_bal_debit(message: Message, db: Database, state: FSMContext) -> None:
+    data = await state.get_data()
+    uid = data.get("uid")
+    amount = _parse_amount(message.text or "")
+    if amount is None:
+        await message.answer("Введите положительное число, например 100")
+        return
+    async with db.session() as session:
+        user = await session.get(User, uid)
+        if not user:
+            await state.clear()
+            await message.answer("Пользователь не найден")
+            return
+        cur = Decimal(user.balance or 0)
+        take = amount if amount <= cur else cur  # не уходим в минус
+        if take > 0:
+            await balance_service.try_debit(session, uid, take)
+            await session.commit()
+        user = await session.get(User, uid)
+        caption, markup = await _bal_card(session, user)
+    await state.clear()
+    await message.answer(f"✅ Списано {texts.rub(take)}")
+    await message.answer(caption, reply_markup=markup)
