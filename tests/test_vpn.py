@@ -68,6 +68,49 @@ async def test_vpn_purchase_delivers_subscription(db):
 
 
 @pytest.mark.asyncio
+async def test_rebuild_active_subscriptions(db):
+    """Смена набора серверов пересобирает подписки уже купивших клиентов."""
+    from bot.services import vpn as vpn_service
+
+    vpn = VPNResellersClient(mock=True)
+    async with db.session() as s:
+        s.add(User(id=7))
+        await balance_service.credit(s, 7, Decimal("1000"))
+        p = Product(game="VPN", title="VPN | VallShop")
+        s.add(p); await s.flush()
+        v = Variant(
+            product_id=p.id, title="VPN 1 мес",
+            liog_product_id=0, liog_variation_id=-1, cost_usd=Decimal("1.99"),
+            source="vpnresellers", fzr_kind="vpn", fzr_a="30", fzr_b="vless",
+        )
+        s.add(v); await s.flush()
+        await settings_service.set(s, settings_service.VPN_SERVER_IDS, "1,2")
+        await s.commit()
+        vid = v.id
+
+    # Покупка с 2 серверами.
+    async with db.session() as s:
+        v = await s.get(Variant, vid)
+        await order_service.purchase_from_balance(
+            s, user_id=7, variant=v, unit_price=Decimal("150"), quantity=1,
+            vpn=vpn, public_base_url="https://shop.vallshop.com",
+        )
+        await s.commit()
+        sub = await s.scalar(__import__("sqlalchemy").select(VpnSubscription))
+        assert base64.b64decode(sub.config_b64).decode().count("vless://") == 2
+
+    # Админ добавил третий сервер → пересборка подписок.
+    async with db.session() as s:
+        updated, total = await vpn_service.rebuild_active_subscriptions(
+            s, vpn, server_ids=["1", "2", "3"]
+        )
+        await s.commit()
+        assert (updated, total) == (1, 1)
+        sub = await s.scalar(__import__("sqlalchemy").select(VpnSubscription))
+        assert base64.b64decode(sub.config_b64).decode().count("vless://") == 3
+
+
+@pytest.mark.asyncio
 async def test_vpn_no_servers_fails(db):
     vpn = VPNResellersClient(mock=True)
     async with db.session() as s:

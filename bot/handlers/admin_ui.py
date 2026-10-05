@@ -8,6 +8,7 @@ admin.py тоже продолжают работать как запасной 
 from __future__ import annotations
 
 import asyncio
+import logging
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Optional
 
@@ -35,6 +36,8 @@ from ..services.pricing import (
 from ..services import rates as rates_service
 from fazercard import FazerCardClient, FazerCardError
 from .. import texts
+
+log = logging.getLogger("vallshop.admin_ui")
 
 router = Router()
 
@@ -203,8 +206,8 @@ async def cb_vpn_home(call: CallbackQuery, db: Database, state: FSMContext, vpn=
         from ..services import settings as settings_service
         ids = await settings_service.get(session, settings_service.VPN_SERVER_IDS, "") or "—"
     kb = InlineKeyboardBuilder()
+    kb.row(_btn("🧩 Выбрать серверы", "vpn_pick"))
     kb.row(_btn("📋 Список серверов", "vpn_list"))
-    kb.row(_btn("✏️ Выбрать серверы", "vpn_pick"))
     kb.row(_btn("⬅️ Назад", "a_home"))
     await call.message.edit_text(
         "🛡 <b>VPN (VPNresellers)</b>\n"
@@ -241,8 +244,145 @@ async def cb_vpn_list(call: CallbackQuery, vpn=None) -> None:
     await call.answer()
 
 
+def _vpn_server_label(s: dict) -> tuple[str, str]:
+    sid = str(s.get("id"))
+    cc = s.get("country_code") or s.get("country") or ""
+    city = s.get("city") or ""
+    name = f"{cc} {city}".strip() or (s.get("name") or sid)
+    return sid, name
+
+
+def _vpn_pick_markup(servers: list, selected: set) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for s in servers[:50]:
+        sid, name = _vpn_server_label(s)
+        mark = "✅" if sid in selected else "⬜"
+        kb.row(_btn(f"{mark} {sid} · {name}", f"vpn_tog:{sid}"))
+    kb.row(_btn("✅ Выбрать все", "vpn_all"), _btn("⬜ Снять все", "vpn_none"))
+    kb.row(_btn("💾 Сохранить", "vpn_save"))
+    kb.row(_btn("✏️ Ввести id вручную", "vpn_manual"), _btn("⬅️ Назад", "vpn_home"))
+    return kb.as_markup()
+
+
+def _vpn_pick_caption(selected: set) -> str:
+    chosen = ", ".join(sorted(selected, key=lambda x: (len(x), x))) or "—"
+    return (
+        "✏️ <b>Выбор серверов</b>\n"
+        "Отметьте серверы — они войдут в подписку клиента (он переключает их в приложении).\n\n"
+        f"Выбрано (<b>{len(selected)}</b>): {chosen}\n\n"
+        "После «💾 Сохранить» подписки уже купивших клиентов пересоберутся "
+        "автоматически (новые серверы появятся при обновлении в приложении)."
+    )
+
+
 @router.callback_query(F.data == "vpn_pick")
-async def cb_vpn_pick(call: CallbackQuery, state: FSMContext) -> None:
+async def cb_vpn_pick(call: CallbackQuery, db: Database, state: FSMContext, vpn=None) -> None:
+    if vpn is None or not getattr(vpn, "configured", False):
+        # Нет токена — только ручной ввод.
+        await _vpn_manual_prompt(call, state)
+        return
+    try:
+        servers = await asyncio.to_thread(vpn.list_vless_servers)
+    except Exception as e:  # noqa: BLE001
+        await call.answer(f"Ошибка загрузки серверов: {e}", show_alert=True)
+        return
+    if not servers:
+        await call.answer("Серверы не найдены — задайте id вручную", show_alert=True)
+        await _vpn_manual_prompt(call, state)
+        return
+    async with db.session() as session:
+        from ..services import settings as settings_service
+        raw = await settings_service.get(session, settings_service.VPN_SERVER_IDS, "")
+    selected = {p.strip() for p in (raw or "").replace(";", ",").split(",") if p.strip()}
+    # В выбор оставляем только реально существующие серверы.
+    available = {str(s.get("id")) for s in servers}
+    selected &= available
+    await state.update_data(vpn_servers=servers, vpn_sel=sorted(selected))
+    await call.message.edit_text(
+        _vpn_pick_caption(selected), reply_markup=_vpn_pick_markup(servers, selected)
+    )
+    await call.answer()
+
+
+async def _vpn_rerender(call: CallbackQuery, state: FSMContext, servers, selected) -> None:
+    await state.update_data(vpn_sel=sorted(selected))
+    try:
+        await call.message.edit_text(
+            _vpn_pick_caption(selected), reply_markup=_vpn_pick_markup(servers, selected)
+        )
+    except Exception:  # noqa: BLE001 — «message is not modified» и т.п.
+        pass
+
+
+@router.callback_query(F.data.startswith("vpn_tog:"))
+async def cb_vpn_toggle(call: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    servers = data.get("vpn_servers") or []
+    selected = set(data.get("vpn_sel") or [])
+    sid = call.data.split(":", 1)[1]
+    selected.discard(sid) if sid in selected else selected.add(sid)
+    await _vpn_rerender(call, state, servers, selected)
+    await call.answer()
+
+
+@router.callback_query(F.data == "vpn_all")
+async def cb_vpn_all(call: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    servers = data.get("vpn_servers") or []
+    selected = {str(s.get("id")) for s in servers}
+    await _vpn_rerender(call, state, servers, selected)
+    await call.answer("Выбраны все серверы")
+
+
+@router.callback_query(F.data == "vpn_none")
+async def cb_vpn_none(call: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    servers = data.get("vpn_servers") or []
+    await _vpn_rerender(call, state, servers, set())
+    await call.answer("Сняты все")
+
+
+@router.callback_query(F.data == "vpn_save")
+async def cb_vpn_save(call: CallbackQuery, db: Database, state: FSMContext, vpn=None) -> None:
+    data = await state.get_data()
+    selected = [str(x) for x in (data.get("vpn_sel") or [])]
+    if not selected:
+        await call.answer("Выберите хотя бы один сервер", show_alert=True)
+        return
+    await state.clear()
+    from ..services import settings as settings_service
+    from ..services import vpn as vpn_service
+    async with db.session() as session:
+        await settings_service.set(session, settings_service.VPN_SERVER_IDS, ",".join(selected))
+        await settings_service.set(session, settings_service.VPN_PROTOCOL, "vless")
+        await session.commit()
+    await call.message.edit_text(
+        f"✅ Серверы подписки: {', '.join(selected)}\n🔄 Пересобираю подписки клиентов…"
+    )
+    await call.answer()
+    # Пересобрать подписки уже купивших клиентов под новый набор серверов.
+    updated, total = 0, 0
+    try:
+        async with db.session() as session:
+            updated, total = await vpn_service.rebuild_active_subscriptions(
+                session, vpn, server_ids=selected
+            )
+            await session.commit()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Пересборка подписок не удалась: %s", e)
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К VPN", "vpn_home"))
+    tail = (
+        f"\nОбновлено подписок: <b>{updated}</b> из {total}." if total
+        else "\nАктивных подписок для обновления нет."
+    )
+    await call.message.edit_text(
+        f"✅ Серверы подписки: {', '.join(selected)}.{tail}",
+        reply_markup=kb.as_markup(),
+    )
+
+
+async def _vpn_manual_prompt(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminUI.vpn_servers)
     await call.message.edit_text(
         "✏️ Пришлите <b>id серверов через запятую</b> (например <code>1,2,3</code>) — "
@@ -252,23 +392,39 @@ async def cb_vpn_pick(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
 
 
+@router.callback_query(F.data == "vpn_manual")
+async def cb_vpn_manual(call: CallbackQuery, state: FSMContext) -> None:
+    await _vpn_manual_prompt(call, state)
+
+
 @router.message(AdminUI.vpn_servers)
-async def msg_vpn_servers(message: Message, db: Database, state: FSMContext) -> None:
+async def msg_vpn_servers(message: Message, db: Database, state: FSMContext, vpn=None) -> None:
     raw = (message.text or "").strip()
     ids = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
     if not ids:
         await message.answer("Пришлите id через запятую, например 1,2,3")
         return
+    await state.clear()
+    from ..services import settings as settings_service
+    from ..services import vpn as vpn_service
     async with db.session() as session:
-        from ..services import settings as settings_service
         await settings_service.set(session, settings_service.VPN_SERVER_IDS, ",".join(ids))
         await settings_service.set(session, settings_service.VPN_PROTOCOL, "vless")
         await session.commit()
-    await state.clear()
+    updated, total = 0, 0
+    try:
+        async with db.session() as session:
+            updated, total = await vpn_service.rebuild_active_subscriptions(
+                session, vpn, server_ids=ids
+            )
+            await session.commit()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Пересборка подписок не удалась: %s", e)
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К VPN", "vpn_home"))
+    tail = f" Обновлено подписок: {updated} из {total}." if total else ""
     await message.answer(
-        f"✅ Серверы подписки: {', '.join(ids)}", reply_markup=kb.as_markup()
+        f"✅ Серверы подписки: {', '.join(ids)}.{tail}", reply_markup=kb.as_markup()
     )
 
 

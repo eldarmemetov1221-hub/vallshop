@@ -111,3 +111,51 @@ async def get_subscription(session: AsyncSession, token: str) -> Optional[VpnSub
     return await session.scalar(
         select(VpnSubscription).where(VpnSubscription.token == token)
     )
+
+
+async def rebuild_active_subscriptions(session: AsyncSession, vpn, server_ids=None):
+    """Пересобрать подписки уже купивших клиентов под текущий набор серверов.
+
+    Нужно после изменения списка VPN-серверов в админке: у каждой НЕ истёкшей
+    подписки заново собираем config_b64 (vless:// по новым серверам) на её же
+    аккаунте. Клиент получит новые серверы при обновлении подписки в приложении.
+
+    Возвращает (обновлено, всего_активных).
+    """
+    import asyncio
+    from sqlalchemy import or_, select
+
+    if vpn is None or not getattr(vpn, "configured", False):
+        return 0, 0
+    if server_ids is None:
+        server_ids = await selected_server_ids(session)
+    if not server_ids:
+        return 0, 0
+
+    now = datetime.utcnow()
+    subs = list(
+        await session.scalars(
+            select(VpnSubscription).where(
+                or_(
+                    VpnSubscription.expires_at.is_(None),
+                    VpnSubscription.expires_at > now,
+                )
+            )
+        )
+    )
+    updated = 0
+    for sub in subs:
+        if not sub.account_id:
+            continue
+        try:
+            b64 = await asyncio.to_thread(
+                vpn.build_subscription, account_id=sub.account_id, server_ids=server_ids
+            )
+        except Exception:  # noqa: BLE001 — одну подписку пропускаем, не роняем всё
+            log.warning("Не удалось пересобрать подписку id=%s", sub.id)
+            continue
+        if b64:
+            sub.config_b64 = b64
+            updated += 1
+    await session.flush()
+    return updated, len(subs)
