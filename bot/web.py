@@ -122,7 +122,7 @@ async def _apply_topup(bot, db: Database, update) -> None:
         bot,
         user_id,
         texts.TOPUP_SUCCESS.format(
-            credit=texts.money(credit), balance=texts.money(balance)
+            credit=texts.rub(credit), balance=texts.rub(balance)
         ),
     )
 
