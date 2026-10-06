@@ -150,7 +150,7 @@ class Variant(Base):
     # Цена в рублях. В режиме "fixed" — ручная неизменная цена; в режиме
     # "smart" — «липкая» цена, пересчитывается от живого закупа по наценке.
     price_rub: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
-    # Режим цены: "smart" (наценка от живого закупа поставщика, порог 0.5%),
+    # Режим цены: "smart" (наценка от живого закупа поставщика, порог 1%),
     # "fixed" (фикс ₽, не меняется), "float"/None (плавает по курсу).
     price_mode: Mapped[Optional[str]] = mapped_column(String(12))
 

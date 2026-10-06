@@ -4,7 +4,7 @@
   * админ задаёт цену в ₽ → из текущего закупа выводится и фиксируется наценка %;
   * дальше цена = ``живой_закуп × (1 + наценка%)`` (округление вверх до 1 ₽),
     хранится в ``price_rub`` как «липкая»;
-  * порог 0.5%: мелкие изменения закупа цену не трогают;
+  * порог 1%: мелкие изменения закупа цену не трогают;
   * при росте > 1% — уведомление администратору;
   * стоп-лосс: если цена оказалась ниже живого закупа — продажа блокируется.
 
@@ -30,7 +30,7 @@ MODE_SMART = "smart"
 MODE_FIXED = "fixed"
 MODE_FLOAT = "float"
 
-TOLERANCE = Decimal("0.005")  # 0.5% — ниже порога цену не меняем
+TOLERANCE = Decimal("0.01")   # 1% — ниже порога цену не меняем
 ALERT_UP = Decimal("0.01")    # уведомляем при росте > 1%
 _ONE = Decimal("1")
 
@@ -63,7 +63,7 @@ async def live_cost(fzr, variant) -> Optional[Decimal]:
 
 
 async def recompute_all(db: Database, fzr, *, bot=None, admin_ids=None) -> list:
-    """Пересчитать умные цены по живому закупу (порог 0.5%). Возвращает изменения.
+    """Пересчитать умные цены по живому закупу (порог 1%). Возвращает изменения.
 
     Обновляет ``price_rub`` (липкую цену) и ``cost_usd`` (для маржи/статистики),
     при росте > 1% собирает алерты и шлёт их администраторам.
@@ -83,6 +83,7 @@ async def recompute_all(db: Database, fzr, *, bot=None, admin_ids=None) -> list:
             if cost is None or Decimal(cost) <= 0:
                 continue
             cost = Decimal(cost)
+            old_cost = Decimal(v.cost_usd or 0)
             mk = v.markup_percent if v.markup_percent is not None else Decimal("0")
             target = target_rub(cost, mk, rate)
             v.cost_usd = cost  # всегда обновляем закуп (маржа/статистика)
@@ -94,15 +95,18 @@ async def recompute_all(db: Database, fzr, *, bot=None, admin_ids=None) -> list:
                 v.price_rub = target
                 changes.append((v.id, v.title, cur, target))
                 if target > cur * (Decimal(1) + ALERT_UP):
-                    alerts.append((v.title, cur, target))
+                    alerts.append((v.title, cur, target, old_cost, cost))
         await session.commit()
 
     if alerts and bot is not None and admin_ids:
         from . import notify as notify_service
         lines = ["📈 <b>Цены выросли (поднялся закуп):</b>", ""]
-        for title, old, new in alerts:
+        for title, old, new, old_cost, new_cost in alerts:
             pct = (new - old) / old * 100
-            lines.append(f"• {title}: {int(old)} → {int(new)} ₽ (+{pct:.1f}%)")
+            lines.append(
+                f"• {title}: {int(old)} → {int(new)} ₽ (+{pct:.1f}%)\n"
+                f"   закуп: {old_cost:.2f} → {new_cost:.2f} $"
+            )
         try:
             await notify_service.notify_admins(bot, admin_ids, "\n".join(lines))
         except Exception:  # noqa: BLE001

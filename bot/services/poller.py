@@ -167,7 +167,7 @@ async def run_smartprice_poller(
     config: BotConfig | None = None,
     interval: float = 600.0,
 ) -> None:
-    """Фоновый пересчёт умных цен по живому закупу (порог 0.5%) + алерты о росте."""
+    """Фоновый пересчёт умных цен по живому закупу (порог 1%) + алерты о росте."""
     from ..services import smartprice as smartprice_service
     while True:
         try:
