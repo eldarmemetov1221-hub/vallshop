@@ -121,7 +121,7 @@ class BotConfig:
         """Способы PayHot для показа клиенту (с дефолтом card/sbp/sberpay)."""
         if not self.payhot_enabled:
             return []
-        return self.payhot_methods or ["card", "sbp", "sberpay"]
+        return self.payhot_methods or ["card", "sbp"]
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_ids
