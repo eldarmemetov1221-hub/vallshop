@@ -29,8 +29,18 @@ DEFAULT_BASE_URL = "https://api.fzr.cards"
 SUCCESS_STATUSES = frozenset(
     {"completed", "complete", "done", "delivered", "success", "fulfilled"}
 )
+# Терминальные «провальные» статусы. Важно: Steam-пополнение и игровые топапы
+# по завершении обработки возвращают деньги со статусом ``refund`` (именно так,
+# без «-ed» — см. OpenAPI: «processing until completed/refund»). Держим оба
+# варианта и синонимы, чтобы поллер гарантированно поймал возврат и вернул
+# деньги покупателю, а не завис в FULFILLING навсегда.
 FAILURE_STATUSES = frozenset(
-    {"failed", "error", "cancelled", "canceled", "refunded", "declined", "rejected"}
+    {
+        "failed", "error", "cancelled", "canceled",
+        "refund", "refunded", "refunding", "returned",
+        "reversed", "chargeback", "void", "voided",
+        "declined", "rejected",
+    }
 )
 
 

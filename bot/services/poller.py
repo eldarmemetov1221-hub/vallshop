@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from aiogram import Bot
@@ -31,6 +31,12 @@ from .. import keyboards as kb
 from .. import texts
 
 log = logging.getLogger("vallshop.poller")
+
+# Через сколько минут «зависший» в FULFILLING заказ FazerCard (поставщик не
+# отдаёт финальный статус) считается подозрительным — один раз уведомляем
+# админа, чтобы деньги покупателя не застряли молча навсегда.
+FULFILL_STUCK_MINUTES = 30
+_STUCK_SENTINEL = "⏳ завис в обработке у поставщика (нет финального статуса)"
 
 
 async def run_fulfillment_poller(
@@ -74,11 +80,20 @@ async def _tick(
 
             refunded = False
             needs_action = False
+            stuck = False
             refund_text = None
             if fresh.supplier == "fazercard":
                 if fzr is None:
                     continue  # клиент не настроен — пропускаем
                 status = await order_service.poll_fazercard(session, fresh, fzr)
+                if status == OrderStatus.FULFILLING:
+                    # Поставщик не отдал финальный статус. Если заказ висит
+                    # слишком долго — один раз зовём админа (не трогаем деньги
+                    # автоматически: заказ может завершиться позже).
+                    age = datetime.utcnow() - (fresh.created_at or datetime.utcnow())
+                    if age >= timedelta(minutes=FULFILL_STUCK_MINUTES) and not fresh.fail_reason:
+                        fresh.fail_reason = _STUCK_SENTINEL
+                        stuck = True
                 if status == OrderStatus.FAILED:
                     auto = await settings_service.get_bool(
                         session, settings_service.AUTO_REFUND, True
@@ -157,6 +172,15 @@ async def _tick(
                 bot, admin_ids,
                 f"⚠️ Заказ #{order_id} (<b>{item_name}</b>): ошибка выдачи.\n"
                 f"Причина: {reason}",
+            )
+        elif stuck:
+            await notify_service.notify_admins(
+                bot, admin_ids,
+                f"⏳ Заказ #{order_id} (<b>{item_name}</b>) висит в обработке у "
+                f"поставщика более {FULFILL_STUCK_MINUTES} мин — финального статуса нет.\n"
+                f"Сумма: <b>{amount_str}</b>. Проверьте вручную: «Админ-панель → "
+                f"Текущие заказы». Если поставщик вернул деньги — заказ можно "
+                f"отменить (возврат на баланс покупателя).",
             )
 
 

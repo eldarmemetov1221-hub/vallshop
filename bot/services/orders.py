@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import uuid
 from datetime import datetime
@@ -26,6 +27,8 @@ from . import balance as balance_service
 from . import referral as referral_service
 from . import settings as settings_service
 from . import stock as stock_service
+
+log = logging.getLogger("vallshop.orders")
 
 
 class PurchaseError(Exception):
@@ -260,9 +263,16 @@ async def _fulfill_fazercard(
         await session.flush()
         return order, []
 
-    # order_id поставщика (для поллинга и поддержки).
+    # order_id поставщика (для поллинга и поддержки). Разные эндпоинты кладут
+    # его по-разному — ищем во всех известных ключах, иначе заказ зависнет в
+    # FULFILLING (поллеру нечего опрашивать) и возврат никогда не сработает.
     env = data.get("order") if isinstance(data, dict) else None
-    oid = env.get("id") if isinstance(env, dict) else None
+    oid = None
+    if isinstance(env, dict):
+        oid = (env.get("id") or env.get("public_id") or env.get("publicId")
+               or env.get("order_id"))
+    if not oid and isinstance(data, dict):
+        oid = data.get("order_id") or data.get("id")
     if oid:
         order.supplier_order_id = str(oid)
 
@@ -320,6 +330,14 @@ async def poll_fazercard(
                 order.status = OrderStatus.FAILED  # ключ/карта без кода — ошибка
     elif FazerCardClient.status_is_terminal_failed(data):
         order.status = OrderStatus.FAILED
+    else:
+        # Не ok и не fail — ещё в обработке. Логируем сырой статус: если это
+        # новый/неизвестный терминальный статус, он виден в логах и его легко
+        # добавить в SUCCESS/FAILURE_STATUSES (а не молча зависнуть навсегда).
+        log.info(
+            "FazerCard заказ #%s (sup=%s) ещё в обработке, статус=%r",
+            order.id, order.supplier_order_id, FazerCardClient._status(data),
+        )
     # иначе остаётся FULFILLING
     await session.flush()
     if order.status == OrderStatus.COMPLETED:

@@ -68,6 +68,16 @@ def test_status_helpers():
     assert not FazerCardClient.status_is_terminal_ok({"order": {"status": "pending"}})
 
 
+@pytest.mark.parametrize("status", ["refund", "refunded", "returned", "reversed", "chargeback"])
+def test_refund_statuses_are_terminal_failed(status):
+    # Steam-пополнение/топапы возвращают деньги со статусом "refund" (без -ed).
+    # Это должно трактоваться как провал заказа, иначе поллер зависнет навсегда
+    # и покупателю не вернут баланс (реальный баг Steam-пополнения).
+    order = {"order": {"status": status}}
+    assert FazerCardClient.status_is_terminal_failed(order)
+    assert not FazerCardClient.status_is_terminal_ok(order)
+
+
 def test_mock_mode_order():
     c = FazerCardClient(mock=True)
     data = c.order_gamekey(game_id="g", key_id="k", quantity=3)
