@@ -160,6 +160,29 @@ async def _tick(
             )
 
 
+async def run_smartprice_poller(
+    bot: Bot,
+    db: Database,
+    fzr: FazerCardClient | None = None,
+    config: BotConfig | None = None,
+    interval: float = 600.0,
+) -> None:
+    """Фоновый пересчёт умных цен по живому закупу (порог 0.5%) + алерты о росте."""
+    from ..services import smartprice as smartprice_service
+    while True:
+        try:
+            if fzr is not None:
+                admin_ids = config.admin_ids if config else None
+                await smartprice_service.recompute_all(
+                    db, fzr, bot=bot, admin_ids=admin_ids
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("Ошибка в поллере умных цен")
+        await asyncio.sleep(interval)
+
+
 async def run_topup_poller(
     bot: Bot, db: Database, provider, interval: float = 30.0
 ) -> None:

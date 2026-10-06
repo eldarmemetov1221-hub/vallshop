@@ -9,6 +9,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from fazercard import FazerCardClient
+
 from ..config import BotConfig
 from ..db import Database
 from ..services import menu as menu_service
@@ -51,6 +53,7 @@ async def cb_home(call: CallbackQuery, state: FSMContext) -> None:
     kb = InlineKeyboardBuilder()
     for m, title in menu_service.MENU_TITLES.items():
         kb.row(_btn(f"📋 {title}", f"ap_menu:{m}"))
+    kb.row(_btn("♻️ Перевести Цены", "ap_migprices"))
     kb.row(_btn("♻️ Сбросить к стандартному", "ap_reset"))
     kb.row(_btn("⬅️ Назад", "a_home"))
     await call.message.edit_text(
@@ -61,6 +64,41 @@ async def cb_home(call: CallbackQuery, state: FSMContext) -> None:
         reply_markup=kb.as_markup(),
     )
     await call.answer()
+
+
+@router.callback_query(F.data == "ap_migprices")
+async def cb_migprices_ask(call: CallbackQuery) -> None:
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("♻️ Да, перевести", "ap_migprices_ok"))
+    kb.row(_btn("⬅️ Отмена", "ap_home"))
+    await call.message.edit_text(
+        "♻️ <b>Перевести цены на умную цену</b>\n\n"
+        "Пройду по товарам <b>поставщика</b> (FazerCard и т.п., где есть живой закуп), "
+        "возьму текущий закуп и зафиксирую из текущей цены наценку. Дальше цена сама "
+        "будет плавать от закупа (порог 0.5%), и при росте &gt; 1% придёт уведомление.\n\n"
+        "❗️ Не трогаю: свой сток кодов, LioGames, VPN и всё, что на 📌 Фикс ₽.\n"
+        "После перевода загляни в пару номиналов — проверь получившиеся наценки.",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "ap_migprices_ok")
+async def cb_migprices_ok(
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient
+) -> None:
+    await call.answer("Перевожу…")
+    from ..services import smartprice as smartprice_service
+    converted, skipped = await smartprice_service.migrate_supplier_to_smart(
+        db, fzr, config.default_markup_percent
+    )
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К оформлению", "ap_home"))
+    await call.message.edit_text(
+        f"✅ Готово.\nПереведено на умную цену: <b>{converted}</b>\n"
+        f"Пропущено (фикс / уже умные / нет закупа): <b>{skipped}</b>",
+        reply_markup=kb.as_markup(),
+    )
 
 
 @router.callback_query(F.data == "ap_reset")

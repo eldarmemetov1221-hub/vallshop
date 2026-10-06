@@ -147,9 +147,12 @@ class Variant(Base):
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)   # закупка GOLD
     price_usd: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))   # фикс-цена (переопределение)
     markup_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2))  # наценка % (переопределение)
-    # Цена в рублях для отображения рядом с ценой в USDT (справочно, ручная).
-    # Списание всё равно идёт в USDT. Если не задана — ₽ не показывается.
+    # Цена в рублях. В режиме "fixed" — ручная неизменная цена; в режиме
+    # "smart" — «липкая» цена, пересчитывается от живого закупа по наценке.
     price_rub: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    # Режим цены: "smart" (наценка от живого закупа поставщика, порог 0.5%),
+    # "fixed" (фикс ₽, не меняется), "float"/None (плавает по курсу).
+    price_mode: Mapped[Optional[str]] = mapped_column(String(12))
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)

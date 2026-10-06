@@ -18,7 +18,11 @@ from .config import BotConfig
 from .db import Database
 from .handlers import build_root_router
 from .payments import build_provider
-from .services.poller import run_fulfillment_poller, run_topup_poller
+from .services.poller import (
+    run_fulfillment_poller,
+    run_smartprice_poller,
+    run_topup_poller,
+)
 
 log = logging.getLogger("vallshop")
 
@@ -192,6 +196,7 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(run_fulfillment_poller(bot, db, liog, fzr, config)),
         asyncio.create_task(run_topup_poller(bot, db, provider)),
+        asyncio.create_task(run_smartprice_poller(bot, db, fzr, config)),
     ]
     if config.public_base_url:
         await _run_web(config, bot, db, provider, liog)

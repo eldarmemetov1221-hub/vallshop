@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Optional
 
 from aiogram import F, Router
@@ -29,6 +29,7 @@ from ..config import BotConfig
 from ..db import Database
 from ..db.models import Order, Product, StockItem, StockStatus, User, Variant
 from ..services import catalog as catalog_service
+from ..services import smartprice as smartprice_service
 from ..services import stock as stock_service
 from ..services.pricing import (
     _fmt_rub, margin, price_label, price_rub_value, sale_price, usd_to_rub,
@@ -705,8 +706,11 @@ async def _variant_card(session, config: BotConfig, variant_id: int):
     rate = rates_service.get_rate()
     cost_usd = Decimal(v.cost_usd or 0)
     client_rub = price_rub_value(v, config.default_markup_percent)
-    # Режим цены: фикс ₽ (не плавает) / плавает по курсу / по наценке.
-    if v.price_rub is not None:
+    # Режим цены: умная / фикс ₽ / плавает по курсу / по наценке.
+    if getattr(v, "price_mode", None) == smartprice_service.MODE_SMART:
+        mk = v.markup_percent if v.markup_percent is not None else 0
+        mode = f"💰 умная · наценка {_fmt_rub(mk)}% · плавает от закупа"
+    elif v.price_rub is not None:
         mode = "📌 фиксированная ₽ (не плавает)"
     elif v.price_usd is not None:
         mode = f"плавает по курсу ({texts.money(price)})"
@@ -1706,17 +1710,23 @@ async def msg_set_rub(message: Message, db: Database, state: FSMContext) -> None
             return
         if raw == "-":
             v.price_rub = None
+            v.price_mode = None
         else:
             try:
                 v.price_rub = Decimal(raw)
             except InvalidOperation:
                 await message.answer("Число или -")
                 return
+            v.price_mode = smartprice_service.MODE_FIXED  # фикс ₽ — не меняется
+            v.price_usd = None
         await session.commit()
     await state.clear()
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
-    await message.answer("✅ Цена ₽ обновлена", reply_markup=kb.as_markup())
+    await message.answer(
+        "✅ Фикс-цена ₽ установлена (не меняется от закупа и курса).",
+        reply_markup=kb.as_markup(),
+    )
 
 
 # ── Редактируемые тексты «ожидание»/«выдача» ────────────────────────────────
@@ -1821,8 +1831,10 @@ async def cb_set_price(call: CallbackQuery, state: FSMContext) -> None:
     rate = rates_service.get_rate()
     await call.message.edit_text(
         f"💰 Пришлите цену продажи <b>в рублях</b> (например <code>299</code>).\n"
-        f"Курс сейчас: 1 USDT = {_fmt_rub(rate)} ₽ — цена будет плавать по курсу "
-        "(при его изменении рублёвая цена пересчитается автоматически).\n"
+        f"Курс сейчас: 1 USDT = {_fmt_rub(rate)} ₽.\n\n"
+        "• Для товаров поставщика (FazerCard) включится <b>умная цена</b>: "
+        "наценка зафиксируется и цена будет сама плавать от закупа (порог 0.5%).\n"
+        "• Для своего стока — цена плавает по курсу.\n"
         "<code>-</code> — убрать (считать по наценке).",
         reply_markup=_cancel_kb(f"a_var:{vid}"),
     )
@@ -1830,11 +1842,15 @@ async def cb_set_price(call: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(AdminUI.set_price)
-async def msg_set_price(message: Message, db: Database, config: BotConfig, state: FSMContext) -> None:
+async def msg_set_price(
+    message: Message, db: Database, config: BotConfig, state: FSMContext,
+    fzr: FazerCardClient,
+) -> None:
     data = await state.get_data()
     vid = data.get("vid")
     raw = (message.text or "").strip().replace(",", ".")
     rate = rates_service.get_rate()
+    note = "(плавает по курсу)."
     async with db.session() as session:
         v = await session.get(Variant, vid)
         if not v:
@@ -1844,23 +1860,39 @@ async def msg_set_price(message: Message, db: Database, config: BotConfig, state
         if raw == "-":
             v.price_usd = None
             v.price_rub = None
+            v.price_mode = None
         else:
             try:
                 rub = Decimal(raw)
             except InvalidOperation:
                 await message.answer("Число или -")
                 return
-            # Рубли → USDT по курсу; храним USDT (цена плавает), фикс-₽ убираем.
-            v.price_usd = (rub / rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            v.price_rub = None
+            cost = None
+            if smartprice_service.supports_smart(v):
+                cost = await smartprice_service.live_cost(fzr, v)
+            if cost and cost > 0:
+                # Умная цена: фиксируем наценку от живого закупа, ₽ — «липкая».
+                v.price_mode = smartprice_service.MODE_SMART
+                v.markup_percent = smartprice_service.derive_markup(rub, cost, rate)
+                v.cost_usd = cost
+                v.price_rub = rub.quantize(Decimal("1"), rounding=ROUND_CEILING)
+                v.price_usd = None
+                note = (
+                    f"— умная цена: наценка {_fmt_rub(v.markup_percent)}%, "
+                    "дальше плавает от закупа."
+                )
+            else:
+                # Нет живого закупа → цена плавает по курсу (как раньше).
+                v.price_usd = (rub / rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                v.price_rub = None
+                v.price_mode = smartprice_service.MODE_FLOAT
         await session.commit()
         client_rub = price_rub_value(v, config.default_markup_percent)
     await state.clear()
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К номиналу", f"a_var:{vid}"))
     await message.answer(
-        f"✅ Цена обновлена. Клиент видит: <b>{texts.rub(client_rub)}</b> "
-        "(плавает по курсу).",
+        f"✅ Цена обновлена. Клиент видит: <b>{texts.rub(client_rub)}</b> {note}",
         reply_markup=kb.as_markup(),
     )
 

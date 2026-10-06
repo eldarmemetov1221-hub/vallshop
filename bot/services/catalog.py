@@ -54,6 +54,42 @@ async def fazercard_stock(fzr, variants: List[Variant]) -> Dict[int, Optional[in
     return result
 
 
+async def fazercard_cost(fzr, variants: List[Variant]) -> Dict[int, "object"]:
+    """Живой закуп (USD, Decimal) для номиналов source='fazercard'.
+
+    Возвращает ``{variant_id: Decimal}``; если закуп неизвестен — ключа нет.
+    Группирует по (kind, category_id) — один запрос на категорию.
+    """
+    from decimal import Decimal as _D
+    result: Dict[int, object] = {}
+    groups: Dict[tuple, List[Variant]] = {}
+    for v in variants:
+        if getattr(v, "source", "stock") == "fazercard" and v.fzr_a and v.fzr_b:
+            groups.setdefault((v.fzr_kind, v.fzr_a), []).append(v)
+    if not groups or fzr is None:
+        return result
+    for (kind, cat_id), vs in groups.items():
+        try:
+            offers = await asyncio.to_thread(fzr.offers_for, kind, cat_id)
+        except Exception:  # noqa: BLE001
+            log.warning("Не удалось получить закуп FazerCard для %s/%s", kind, cat_id)
+            continue
+        cmap: Dict[str, object] = {}
+        for o in offers:
+            pu = o.get("price_usd")
+            if pu is None:
+                continue
+            try:
+                cmap[str(o.get("id"))] = _D(str(pu))
+            except Exception:  # noqa: BLE001
+                pass
+        for v in vs:
+            c = cmap.get(str(v.fzr_b))
+            if c is not None:
+                result[v.id] = c
+    return result
+
+
 async def list_products(
     session: AsyncSession,
     *,

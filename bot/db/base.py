@@ -57,6 +57,7 @@ class Database:
             ("orders", "supplier_order_id", "VARCHAR(64)"),
             ("products", "parent_id", "INTEGER"),
             ("variants", "price_rub", "NUMERIC(12,2)"),
+            ("variants", "price_mode", "VARCHAR(12)"),
             ("users", "block_reason", "VARCHAR(255)"),
             ("products", "pending_text", "TEXT"),
             ("products", "delivered_text", "TEXT"),

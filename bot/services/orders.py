@@ -117,6 +117,17 @@ async def purchase_from_balance(
     Бросает OutOfStock / InsufficientBalance / SupplierError. Вызывающий код
     коммитит при успехе и откатывает при исключении (откат возвращает баланс).
     """
+    # Стоп-лосс для «умной» цены: не продаём ниже живого закупа поставщика.
+    if getattr(variant, "price_mode", None) == "smart" and variant.source == "fazercard":
+        from . import smartprice as smartprice_service
+        try:
+            if await smartprice_service.stop_loss_violation(fzr, variant, unit_price):
+                raise SupplierError("Цена ниже закупа — продажа остановлена (стоп-лосс)")
+        except SupplierError:
+            raise
+        except Exception:  # noqa: BLE001 — сбой проверки не должен ронять покупку
+            pass
+
     total = Decimal(unit_price) * quantity
 
     order = await create_order(
