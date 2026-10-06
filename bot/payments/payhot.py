@@ -123,14 +123,14 @@ class PayHotProvider(PaymentProvider):
         network: Optional[str] = None,  # здесь — способ оплаты (card/sbp/sberpay)
     ) -> Invoice:
         method = (network or (self.methods[0] if self.methods else "card")).lower()
+        # PayHot — строгий парсер (unknown field → 400). Шлём только эти поля;
+        # URL возврата клиента настраивается в кабинете проекта, не в запросе.
         body = {
             "merchant_order_reference": client_ref,
             "amount_minor": self._to_minor(amount),
             "currency": "RUB",
             "payment_method": method,
         }
-        if success_url:
-            body["success_url"] = success_url
 
         if self.mock:
             d = {
