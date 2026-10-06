@@ -11,7 +11,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..db.models import Order, Product, StockItem, Variant
+from ..db.models import (
+    Order,
+    Payment,
+    Product,
+    ReferralEarning,
+    Review,
+    StockItem,
+    Variant,
+    VpnSubscription,
+)
 
 log = logging.getLogger("vallshop.catalog")
 
@@ -237,6 +246,51 @@ async def delete_variant(session: AsyncSession, variant_id: int) -> tuple[bool, 
     return True, "ok"
 
 
+async def variant_order_count(session: AsyncSession, variant_id: int) -> int:
+    """Сколько заказов привязано к номиналу (для предупреждений при удалении)."""
+    return await _variant_order_count(session, [variant_id])
+
+
+async def product_order_count(session: AsyncSession, product_id: int) -> int:
+    """Сколько заказов по всем номиналам товара/категории (с вложенностью)."""
+    ids = await _descendant_product_ids(session, product_id)
+    var_ids = list(
+        await session.scalars(select(Variant.id).where(Variant.product_id.in_(ids)))
+    )
+    return await _variant_order_count(session, var_ids)
+
+
+async def _purge_orders(session: AsyncSession, var_ids: List[int]) -> int:
+    """Удалить заказы по номиналам и все зависящие от них записи.
+
+    Чистит платежи, реферальные начисления, VPN-подписки и отзывы, завязанные
+    на эти заказы, чтобы не осталось «висячих» ссылок. Возвращает число
+    удалённых заказов. НЕ коммитит (делает вызывающий код).
+    """
+    if not var_ids:
+        return 0
+    order_ids = list(
+        await session.scalars(select(Order.id).where(Order.variant_id.in_(var_ids)))
+    )
+    if order_ids:
+        for model in (Payment, ReferralEarning, VpnSubscription, Review):
+            await session.execute(sa_delete(model).where(model.order_id.in_(order_ids)))
+        await session.execute(sa_delete(Order).where(Order.id.in_(order_ids)))
+    return len(order_ids)
+
+
+async def force_delete_variant(session: AsyncSession, variant_id: int) -> tuple[bool, str]:
+    """Удалить номинал ВМЕСТЕ с заказами по нему (необратимо, влияет на статистику)."""
+    v = await session.get(Variant, variant_id)
+    if v is None:
+        return False, "missing"
+    await _purge_orders(session, [variant_id])
+    await session.execute(sa_delete(StockItem).where(StockItem.variant_id == variant_id))
+    await session.execute(sa_delete(Variant).where(Variant.id == variant_id))
+    await session.commit()
+    return True, "ok"
+
+
 async def delete_product(session: AsyncSession, product_id: int) -> tuple[bool, str]:
     """Удалить товар/категорию со всеми подкатегориями и номиналами.
 
@@ -252,6 +306,30 @@ async def delete_product(session: AsyncSession, product_id: int) -> tuple[bool, 
     )
     if await _variant_order_count(session, var_ids):
         return False, "orders"
+    if var_ids:
+        await session.execute(
+            sa_delete(StockItem).where(StockItem.variant_id.in_(var_ids))
+        )
+        await session.execute(sa_delete(Variant).where(Variant.id.in_(var_ids)))
+    await session.execute(sa_delete(Product).where(Product.id.in_(ids)))
+    await session.commit()
+    return True, "ok"
+
+
+async def force_delete_product(session: AsyncSession, product_id: int) -> tuple[bool, str]:
+    """Удалить товар/категорию ВМЕСТЕ с заказами по всем номиналам.
+
+    Необратимо и задним числом меняет статистику (выручка/прибыль по удалённым
+    заказам пропадают). Возвращает ``(ok, reason)``: reason ∈ {"ok", "missing"}.
+    """
+    root = await session.get(Product, product_id)
+    if root is None:
+        return False, "missing"
+    ids = await _descendant_product_ids(session, product_id)
+    var_ids = list(
+        await session.scalars(select(Variant.id).where(Variant.product_id.in_(ids)))
+    )
+    await _purge_orders(session, var_ids)
     if var_ids:
         await session.execute(
             sa_delete(StockItem).where(StockItem.variant_id.in_(var_ids))

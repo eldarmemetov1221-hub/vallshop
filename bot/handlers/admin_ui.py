@@ -939,14 +939,62 @@ async def cb_prod_delete_ask(call: CallbackQuery, db: Database) -> None:
         )
     kb = InlineKeyboardBuilder()
     kb.row(_btn("🗑 Да, удалить", f"a_pdelok:{pid}"))
+    kb.row(_btn("🗑 Удалить с заказами", f"a_pdelf:{pid}"))
     kb.row(_btn("⬅️ Отмена", f"a_prod:{pid}"))
     await call.message.edit_text(
         f"Удалить <b>{product.title}</b>?{warn}\n\n"
-        "Удаление необратимо. Если по номиналам уже были заказы — "
-        "удалить нельзя (используйте «🔁 Вкл/выкл»).",
+        "Удаление необратимо. Если по номиналам уже были заказы — обычное "
+        "удаление нельзя (используйте «🔁 Вкл/выкл» или «🗑 Удалить с заказами»).",
         reply_markup=kb.as_markup(),
     )
     await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_pdelf:"))
+async def cb_prod_delete_force_ask(call: CallbackQuery, db: Database) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        product = await session.get(Product, pid)
+        if not product:
+            await call.answer("Не найдено", show_alert=True)
+            return
+        orders = await catalog_service.product_order_count(session, pid)
+        title = product.title
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("🗑 Да, удалить всё (с заказами)", f"a_pdelfok:{pid}"))
+    kb.row(_btn("⬅️ Отмена", f"a_prod:{pid}"))
+    await call.message.edit_text(
+        f"⚠️ Удалить <b>{title}</b> ВМЕСТЕ с заказами?\n\n"
+        f"Будет удалено заказов: <b>{orders}</b> (и связанные платежи, отзывы, "
+        "реферальные начисления).\n\n"
+        "❗️ Это <b>необратимо</b> и задним числом изменит статистику: выручка и "
+        "прибыль по этим заказам пропадут, у клиентов исчезнет история покупок.",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_pdelfok:"))
+async def cb_prod_delete_force(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    pid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        product = await session.get(Product, pid)
+        parent_id = product.parent_id if product else None
+        ok, reason = await catalog_service.force_delete_product(session, pid)
+    if not ok:
+        await call.answer("Не найдено", show_alert=True)
+        return
+    if parent_id:
+        async with db.session() as session:
+            caption, markup = await _product_card(session, config, parent_id)
+        await call.message.edit_text(caption, reply_markup=markup)
+    else:
+        async with db.session() as session:
+            markup = await _products_kb(session)
+        await call.message.edit_text(
+            "📦 <b>Товары</b>\nВыберите товар:", reply_markup=markup
+        )
+    await call.answer("Удалено вместе с заказами")
 
 
 @router.callback_query(F.data.startswith("a_pdelok:"))
@@ -990,14 +1038,55 @@ async def cb_var_delete_ask(call: CallbackQuery, db: Database) -> None:
         title = v.title
     kb = InlineKeyboardBuilder()
     kb.row(_btn("🗑 Да, удалить", f"a_vdelok:{vid}"))
+    kb.row(_btn("🗑 Удалить с заказами", f"a_vdelf:{vid}"))
     kb.row(_btn("⬅️ Отмена", f"a_var:{vid}"))
     await call.message.edit_text(
         f"Удалить номинал <b>{title}</b>?\n\n"
-        "Удаление необратимо. Если по нему уже были заказы — удалить нельзя "
-        "(используйте «🔁 Вкл/выкл»).",
+        "Удаление необратимо. Если по нему уже были заказы — обычное удаление "
+        "нельзя (используйте «🔁 Вкл/выкл» или «🗑 Удалить с заказами»).",
         reply_markup=kb.as_markup(),
     )
     await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_vdelf:"))
+async def cb_var_delete_force_ask(call: CallbackQuery, db: Database) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        if not v:
+            await call.answer("Не найдено", show_alert=True)
+            return
+        title = v.title
+        orders = await catalog_service.variant_order_count(session, vid)
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("🗑 Да, удалить всё (с заказами)", f"a_vdelfok:{vid}"))
+    kb.row(_btn("⬅️ Отмена", f"a_var:{vid}"))
+    await call.message.edit_text(
+        f"⚠️ Удалить номинал <b>{title}</b> ВМЕСТЕ с заказами?\n\n"
+        f"Будет удалено заказов: <b>{orders}</b> (и связанные платежи, отзывы, "
+        "реферальные начисления).\n\n"
+        "❗️ Это <b>необратимо</b> и задним числом изменит статистику: выручка и "
+        "прибыль по этим заказам пропадут, у клиентов исчезнет история покупок.",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("a_vdelfok:"))
+async def cb_var_delete_force(call: CallbackQuery, db: Database, config: BotConfig) -> None:
+    vid = int(call.data.split(":", 1)[1])
+    async with db.session() as session:
+        v = await session.get(Variant, vid)
+        product_id = v.product_id if v else None
+        ok, reason = await catalog_service.force_delete_variant(session, vid)
+    if not ok:
+        await call.answer("Не найдено", show_alert=True)
+        return
+    async with db.session() as session:
+        caption, markup = await _product_card(session, config, product_id)
+    await call.message.edit_text(caption, reply_markup=markup)
+    await call.answer("Удалено вместе с заказами")
 
 
 @router.callback_query(F.data.startswith("a_vdelok:"))

@@ -117,6 +117,71 @@ async def test_delete_product_blocked_by_nested_order(db):
 
 
 @pytest.mark.asyncio
+async def test_force_delete_variant_purges_orders_and_deps(db):
+    from sqlalchemy import func, select
+    from bot.db.models import Payment, ReferralEarning, Review, VpnSubscription
+
+    async with db.session() as s:
+        s.add(User(id=1, username="buyer"))
+        p = Product(game="PUBG", title="PUBG UC")
+        s.add(p)
+        await s.flush()
+        v = await _variant(s, p.id)
+        o = Order(client_ref="r1", user_id=1, variant_id=v.id, price_usd=Decimal("5"))
+        s.add(o)
+        await s.flush()
+        s.add(Payment(order_id=o.id, provider="payhot", amount=Decimal("5")))
+        s.add(ReferralEarning(referrer_id=2, referral_id=1, order_id=o.id, amount=Decimal("1")))
+        s.add(Review(order_id=o.id, user_id=1, rating=5, text="ok"))
+        s.add(VpnSubscription(token="t1", order_id=o.id, user_id=1))
+        await s.commit()
+        vid = v.id
+
+    async with db.session() as s:
+        assert await catalog_service.variant_order_count(s, vid) == 1
+        ok, reason = await catalog_service.force_delete_variant(s, vid)
+        assert ok and reason == "ok"
+
+    async with db.session() as s:
+        assert await s.get(Variant, vid) is None
+        for model in (Order, Payment, ReferralEarning, Review, VpnSubscription):
+            left = await s.scalar(select(func.count()).select_from(model))
+            assert left == 0, model.__name__
+
+
+@pytest.mark.asyncio
+async def test_force_delete_product_purges_nested_orders(db):
+    from sqlalchemy import func, select
+
+    async with db.session() as s:
+        s.add(User(id=1, username="buyer"))
+        parent = Product(game="PUBG", title="PUBG UC")
+        s.add(parent)
+        await s.flush()
+        child = Product(game="PUBG", title="Global", parent_id=parent.id)
+        s.add(child)
+        await s.flush()
+        v = await _variant(s, child.id, vid=1)
+        s.add(Order(client_ref="r1", user_id=1, variant_id=v.id, price_usd=Decimal("5")))
+        await s.commit()
+        pid = parent.id
+
+    async with db.session() as s:
+        assert await catalog_service.product_order_count(s, pid) == 1
+        # обычное удаление заблокировано
+        ok, reason = await catalog_service.delete_product(s, pid)
+        assert not ok and reason == "orders"
+        # принудительное — проходит
+        ok, reason = await catalog_service.force_delete_product(s, pid)
+        assert ok and reason == "ok"
+
+    async with db.session() as s:
+        assert await s.scalar(select(func.count()).select_from(Product)) == 0
+        assert await s.scalar(select(func.count()).select_from(Variant)) == 0
+        assert await s.scalar(select(func.count()).select_from(Order)) == 0
+
+
+@pytest.mark.asyncio
 async def test_reparent_moves_into_category(db):
     async with db.session() as s:
         hub = Product(game="Игры", title="Игры и Сервисы")
