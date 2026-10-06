@@ -18,8 +18,24 @@ async def db():
 
 
 def test_target_rub_ceiling():
-    # ceil(1.00 × 95 × 1.5) = ceil(142.5) = 143
+    # ceil(1.00 × 95 × 1.5) = ceil(142.5) = 143  (≥100 → до целого)
     assert smartprice.target_rub(Decimal("1.00"), Decimal("50"), Decimal("95")) == Decimal("143")
+
+
+def test_round_price_rub_cheap_vs_expensive():
+    from bot.services.pricing import round_price_rub
+    # < 100 ₽ → округление вверх до 10 копеек (всегда оканчивается на 0)
+    assert round_price_rub(Decimal("78.37")) == Decimal("78.40")
+    assert round_price_rub(Decimal("78.41")) == Decimal("78.50")
+    assert round_price_rub(Decimal("78.00")) == Decimal("78.0")
+    # ≥ 100 ₽ → до целого рубля
+    assert round_price_rub(Decimal("142.50")) == Decimal("143")
+    assert round_price_rub(Decimal("290.00")) == Decimal("290")
+
+
+def test_target_rub_cheap_dime_step():
+    # 0.50 × 95 × 1.5 = 71.25 → <100 → вверх до 10 коп → 71.30
+    assert smartprice.target_rub(Decimal("0.50"), Decimal("50"), Decimal("95")) == Decimal("71.30")
 
 
 def test_derive_and_target_roundtrip():

@@ -32,7 +32,7 @@ from ..services import catalog as catalog_service
 from ..services import smartprice as smartprice_service
 from ..services import stock as stock_service
 from ..services.pricing import (
-    _fmt_rub, margin, price_label, price_rub_value, sale_price, usd_to_rub,
+    _fmt_rub, margin, price_label, price_rub_value, round_price_rub, sale_price, usd_to_rub,
 )
 from ..services import rates as rates_service
 from fazercard import FazerCardClient, FazerCardError
@@ -1875,7 +1875,7 @@ async def msg_set_price(
                 v.price_mode = smartprice_service.MODE_SMART
                 v.markup_percent = smartprice_service.derive_markup(rub, cost, rate)
                 v.cost_usd = cost
-                v.price_rub = rub.quantize(Decimal("1"), rounding=ROUND_CEILING)
+                v.price_rub = round_price_rub(rub)
                 v.price_usd = None
                 note = (
                     f"— умная цена: наценка {_fmt_rub(v.markup_percent)}%, "

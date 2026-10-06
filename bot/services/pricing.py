@@ -17,7 +17,20 @@ from ..db.models import Variant
 from . import rates as rates_service
 
 _CENT = Decimal("0.01")
+_DIME = Decimal("0.1")
 _ONE = Decimal("1")
+
+# Порог «дешёвых» товаров: ниже него цена округляется до 10 копеек (всегда
+# оканчивается на 0: 78.40), от порога и выше — до целого рубля.
+CHEAP_THRESHOLD = Decimal("100")
+
+
+def round_price_rub(value: Decimal) -> Decimal:
+    """Округлить рублёвую цену ВВЕРХ: до 10 копеек для <100 ₽, иначе до 1 ₽."""
+    v = Decimal(value)
+    if v < CHEAP_THRESHOLD:
+        return v.quantize(_DIME, rounding=ROUND_CEILING)
+    return v.quantize(_ONE, rounding=ROUND_CEILING)
 
 
 def quantize_money(value: Decimal) -> Decimal:
@@ -50,10 +63,10 @@ def _fmt_rub(value: Decimal) -> str:
 
 
 def usd_to_rub(value: Decimal, rate: Optional[Decimal] = None) -> Decimal:
-    """Перевести USD в рубли по курсу, округлив ВВЕРХ до 1 ₽."""
+    """Перевести USD в рубли по курсу, округлив ВВЕРХ (до 10 коп. <100 ₽, иначе до 1 ₽)."""
     r = rate if rate is not None else rates_service.get_rate()
     rub = Decimal(value) * Decimal(r)
-    return rub.quantize(_ONE, rounding=ROUND_CEILING)
+    return round_price_rub(rub)
 
 
 def price_rub_value(
@@ -66,7 +79,7 @@ def price_rub_value(
     """
     manual = getattr(variant, "price_rub", None)
     if manual is not None:
-        return Decimal(manual).quantize(_ONE, rounding=ROUND_CEILING)
+        return round_price_rub(manual)
     return usd_to_rub(sale_price(variant, default_markup_percent))
 
 

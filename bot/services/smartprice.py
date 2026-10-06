@@ -51,9 +51,10 @@ def derive_markup(price_rub, cost_usd, rate) -> Decimal:
 
 
 def target_rub(cost_usd, markup_percent, rate) -> Decimal:
-    """Целевая ₽-цена = закуп × (1 + наценка%) × курс, вверх до 1 ₽."""
+    """Целевая ₽-цена = закуп × (1 + наценка%) × курс (до 10 коп. <100 ₽, иначе до 1 ₽)."""
+    from .pricing import round_price_rub
     val = Decimal(cost_usd) * Decimal(rate) * (Decimal(1) + Decimal(markup_percent) / 100)
-    return val.quantize(_ONE, rounding=ROUND_CEILING)
+    return round_price_rub(val)
 
 
 async def live_cost(fzr, variant) -> Optional[Decimal]:
