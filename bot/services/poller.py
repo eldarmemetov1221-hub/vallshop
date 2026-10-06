@@ -184,7 +184,7 @@ async def run_smartprice_poller(
 
 
 async def run_topup_poller(
-    bot: Bot, db: Database, provider, interval: float = 30.0
+    bot: Bot, db: Database, provider, payhot=None, interval: float = 30.0
 ) -> None:
     """Фоновая авто-проверка пополнений (подстраховка вебхука).
 
@@ -193,7 +193,7 @@ async def run_topup_poller(
     идемпотентны (повтор с вебхуком безопасен)."""
     while True:
         try:
-            await _topup_tick(bot, db, provider)
+            await _topup_tick(bot, db, provider, payhot)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
@@ -201,7 +201,14 @@ async def run_topup_poller(
         await asyncio.sleep(interval)
 
 
-async def _topup_tick(bot: Bot, db: Database, provider) -> None:
+def _provider_and_ref(topup, provider, payhot):
+    """Выбрать провайдера и ключ для проверки статуса по topup.provider."""
+    if topup.provider == "payhot" and payhot is not None:
+        return payhot, topup.provider_order_id
+    return provider, topup.client_ref
+
+
+async def _topup_tick(bot: Bot, db: Database, provider, payhot=None) -> None:
     async with db.session() as session:
         pending = list(
             await session.scalars(
@@ -218,8 +225,11 @@ async def _topup_tick(bot: Bot, db: Database, provider) -> None:
                 fresh.status = TopUpStatus.EXPIRED
                 await session.commit()
                 continue
+            prov, ref = _provider_and_ref(fresh, provider, payhot)
+            if prov is None or not ref:
+                continue
             try:
-                update = await provider.get_status(fresh.client_ref)
+                update = await prov.get_status(ref)
             except Exception:  # noqa: BLE001 — провайдер недоступен, попробуем позже
                 continue
             if getattr(update, "status", None) != "paid":

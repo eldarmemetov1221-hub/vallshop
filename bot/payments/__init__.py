@@ -3,6 +3,20 @@
 from .base import Invoice, PaymentProvider, PaymentUpdate
 from .boltutil import BoltUtilProvider
 from .mock import MockProvider
+from .payhot import PayHotProvider
+
+
+def build_payhot(config):
+    """Собрать PayHot-провайдера (₽: карта/СБП/SberPay) или None, если не настроен."""
+    if not getattr(config, "payhot_enabled", False):
+        return None
+    return PayHotProvider(
+        base_url=config.payhot_base_url,
+        api_key=config.payhot_api_key,
+        secret=config.payhot_secret,
+        methods=config.payhot_method_list,
+        mock=config.payhot_mock,
+    )
 
 
 def build_provider(config) -> PaymentProvider:
@@ -27,5 +41,7 @@ __all__ = [
     "PaymentUpdate",
     "BoltUtilProvider",
     "MockProvider",
+    "PayHotProvider",
     "build_provider",
+    "build_payhot",
 ]

@@ -64,6 +64,13 @@ class BotConfig:
     public_base_url: Optional[str] = None
     payment_timeout_minutes: int = 30
 
+    # ── PayHot (приём ₽: карта / СБП / SberPay) ───────────────────────────────
+    payhot_base_url: str = "https://app.pay.hot/api/v2"
+    payhot_api_key: Optional[str] = None
+    payhot_secret: Optional[str] = None  # секрет подписи вебхука PayHot
+    payhot_methods: List[str] = field(default_factory=list)  # card,sbp,sberpay
+    payhot_mock: bool = False
+
     # Контакт поддержки (Telegram @username, ссылка или email) — для оферты/FAQ.
     support_contact: Optional[str] = None
     # Юр. данные для оферты (ИП/самозанятый/компания и т.п.) — опционально.
@@ -101,6 +108,21 @@ class BotConfig:
         """Список доступных сетей (нормализованный, с дефолтом)."""
         return self.bolt_networks or [self.bolt_network]
 
+    @property
+    def payhot_notify_url(self) -> Optional[str]:
+        return self._pub("/payhot/webhook")
+
+    @property
+    def payhot_enabled(self) -> bool:
+        return self.payhot_mock or bool(self.payhot_api_key and self.payhot_secret)
+
+    @property
+    def payhot_method_list(self) -> List[str]:
+        """Способы PayHot для показа клиенту (с дефолтом card/sbp/sberpay)."""
+        if not self.payhot_enabled:
+            return []
+        return self.payhot_methods or ["card", "sbp", "sberpay"]
+
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_ids
 
@@ -126,6 +148,15 @@ class BotConfig:
             ],
             public_base_url=_get("PUBLIC_BASE_URL"),
             payment_timeout_minutes=int(_get("PAYMENT_TIMEOUT_MINUTES", "30")),
+            payhot_base_url=_get("PAYHOT_BASE_URL", "https://app.pay.hot/api/v2"),
+            payhot_api_key=_get("PAYHOT_API_KEY"),
+            payhot_secret=_get("PAYHOT_SECRET"),
+            payhot_methods=[
+                m.strip().lower()
+                for m in (_get("PAYHOT_METHODS", "") or "").replace(";", ",").split(",")
+                if m.strip()
+            ],
+            payhot_mock=_truthy(_get("PAYHOT_MOCK")),
             mock_payments=_truthy(_get("MOCK_PAYMENTS")),
             support_contact=_get("SUPPORT_CONTACT"),
             legal_entity=_get("LEGAL_ENTITY"),

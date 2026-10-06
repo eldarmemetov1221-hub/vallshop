@@ -309,10 +309,21 @@ def balance_kb() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def topup_methods_kb() -> InlineKeyboardMarkup:
-    """Выбор способа пополнения. Пока — только USDT (внутри — выбор сети)."""
+_PAYHOT_BTN = {
+    "card": "💳 Банковская карта",
+    "sbp": "⚡ СБП",
+    "sberpay": "🟢 SberPay",
+}
+
+
+def topup_methods_kb(payhot_methods: list[str] | None = None) -> InlineKeyboardMarkup:
+    """Выбор способа пополнения: ₽ (PayHot: карта/СБП/SberPay) и USDT (крипта)."""
     kb = InlineKeyboardBuilder()
-    kb.row(_b("USDT", callback_data="tu_usdt", style="primary", icon=EMOJI["usdt"]))
+    for m in (payhot_methods or []):
+        label = _PAYHOT_BTN.get(m)
+        if label:
+            kb.row(_b(label, callback_data=f"tu_ph:{m}", style="success"))
+    kb.row(_b("USDT (крипта)", callback_data="tu_usdt", style="primary", icon=EMOJI["usdt"]))
     kb.row(_b("Отмена", callback_data="balance", icon=EMOJI["back"]))
     return kb.as_markup()
 
