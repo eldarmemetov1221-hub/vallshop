@@ -67,3 +67,23 @@ def test_product_and_variant_icons():
     markup = kb.variants_kb([v], {5: D("5.00")}, {5: 3}, "USDT")
     vbtn = _flat(markup)[0]
     assert vbtn.icon_custom_emoji_id == EMOJI["variant"]
+
+
+def test_catalog_layout_stars_premium_paired():
+    """Раскладка каталога: [Звёзды][Премиум] в паре, остальные — на всю строку."""
+    from bot.db.models import Product
+
+    products = [
+        Product(id=1, game="TG_STARS", title="Телеграм Звёзды", full_width=False, sort_order=10),
+        Product(id=2, game="x", title="Телеграм Премиум", full_width=False, sort_order=20),
+        Product(id=3, game="Игры", title="Игры и Сервисы", full_width=True, sort_order=30),
+        Product(id=4, game="STEAM_TOPUP", title="Пополнить Steam", full_width=True, sort_order=40),
+        Product(id=5, game="VPN", title="VPN | VallShop", full_width=True, sort_order=50),
+    ]
+    rows = kb.products_kb(products, columns=2).inline_keyboard
+    # строка 0 — пара Звёзды+Премиум; затем три одиночных; последняя — «Назад»
+    assert [b.text for b in rows[0]] == ["Телеграм Звёзды", "Телеграм Премиум"]
+    assert [b.text for b in rows[1]] == ["Игры и Сервисы"]
+    assert [b.text for b in rows[2]] == ["Пополнить Steam"]
+    assert [b.text for b in rows[3]] == ["VPN | VallShop"]
+    assert len(rows[4]) == 1  # кнопка «Назад»

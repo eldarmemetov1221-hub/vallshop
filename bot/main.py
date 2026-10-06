@@ -90,7 +90,7 @@ async def _seed_vpn_category(db: Database) -> None:
             icon_emoji_id="6300855020531225173",
             button_style="danger",
             full_width=True,
-            sort_order=100,  # чтобы была ниже других категорий
+            sort_order=50,  # внизу каталога
         )
         session.add(p)
         await settings_service.set(session, "vpn_category_seeded", "1")
@@ -119,7 +119,7 @@ async def _seed_steam_category(db: Database) -> None:
             icon_emoji_id="5372817526801589587",
             button_style="primary",
             full_width=True,
-            sort_order=90,  # выше VPN (100), ниже обычных категорий
+            sort_order=40,
         )
         session.add(p)
         await session.flush()
@@ -159,8 +159,8 @@ async def _seed_stars_category(db: Database) -> None:
             is_active=True,
             icon_emoji_id="5886685105065300941",
             button_style="primary",
-            full_width=True,
-            sort_order=91,  # сразу под «Пополнить Steam» (90)
+            full_width=False,  # в паре с «Телеграм Премиум»
+            sort_order=10,
         )
         session.add(p)
         await session.flush()
@@ -178,6 +178,45 @@ async def _seed_stars_category(db: Database) -> None:
         await settings_service.set(session, "stars_category_seeded", "1")
         await session.commit()
     log.info("Кнопка «Телеграм Звёзды» создана")
+
+
+async def _reorder_catalog_v1(db: Database) -> None:
+    """Разово выстроить кнопки каталога в нужном порядке/раскладке.
+
+    Целевая раскладка верхнего уровня:
+      [Телеграм Звёзды] [Телеграм Премиум]   (в паре)
+      [Игры и Сервисы]  (на всю строку)
+      [Пополнить Steam] (на всю строку)
+      [VPN | VallShop]  (на всю строку)
+
+    Админка не умеет менять порядок (sort_order), поэтому правим прямо в БД.
+    Системные кнопки ищем по game, пользовательские — по названию.
+    """
+    from sqlalchemy import select
+    from .db.models import Product
+    from .services import settings as settings_service
+
+    async with db.session() as session:
+        if await settings_service.get(session, "catalog_reorder_v1"):
+            return
+        products = list(
+            await session.scalars(select(Product).where(Product.parent_id.is_(None)))
+        )
+        for p in products:
+            title = (p.title or "").lower()
+            if p.game == "TG_STARS":
+                p.sort_order, p.full_width = 10, False
+            elif "преми" in title or "premium" in title:
+                p.sort_order, p.full_width = 20, False
+            elif "игры и сервис" in title:
+                p.sort_order, p.full_width = 30, True
+            elif p.game == "STEAM_TOPUP":
+                p.sort_order, p.full_width = 40, True
+            elif p.game == "VPN":
+                p.sort_order, p.full_width = 50, True
+        await settings_service.set(session, "catalog_reorder_v1", "1")
+        await session.commit()
+    log.info("Каталог: кнопки переупорядочены (v1)")
 
 
 async def main() -> None:
@@ -198,6 +237,7 @@ async def main() -> None:
     await _seed_vpn_category(db)  # разовое создание категории «VPN | VallShop»
     await _seed_steam_category(db)  # разовое создание кнопки «Пополнить Steam»
     await _seed_stars_category(db)  # разовое создание кнопки «Телеграм Звёзды»
+    await _reorder_catalog_v1(db)   # разовая раскладка кнопок каталога
 
     provider = build_provider(config)
     payhot = build_payhot(config)
