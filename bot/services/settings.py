@@ -29,6 +29,11 @@ STEAM_MARKUP = "steam_markup_percent"   # наценка %, напр. "5"
 STEAM_MIN_RUB = "steam_min_rub"         # мин. сумма заказа клиенту, ₽
 STEAM_MAX_RUB = "steam_max_rub"         # макс. сумма заказа клиенту, ₽
 
+# Telegram Звёзды (FazerCards) — свободный выбор количества, умная цена
+STARS_MARKUP = "stars_markup_percent"   # наценка %, напр. "10"
+STARS_MIN_QTY = "stars_min_qty"         # мин. кол-во звёзд (переопределение API)
+STARS_MAX_QTY = "stars_max_qty"         # макс. кол-во звёзд (переопределение API)
+
 # Реферальная программа
 REF_ENABLED = "ref_enabled"              # "1"/"0"
 REF_PERCENT = "ref_percent"              # процент с покупок, напр. "5"

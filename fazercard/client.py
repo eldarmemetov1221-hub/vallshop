@@ -289,6 +289,10 @@ class FazerCardClient:
         body = {"category_id": category_id, "offer_id": offer_id, "fields": dict(fields)}
         return self._request("POST", "/api/v2/topups/order", json_body=body, idempotency_key=idempotency_key)
 
+    def telegram_stars_quote(self) -> Dict[str, Any]:
+        """GET /telegram/stars — котировка: price_per_star (USD), min/max количество."""
+        return self._request("GET", "/api/v2/telegram/stars")
+
     def order_telegram_stars(self, *, telegram_username: str, quantity: int, idempotency_key: Optional[str] = None):
         """POST /telegram/stars/buy -> звёзды на username (quantity 50–10000)."""
         body = {"telegram_username": telegram_username, "quantity": int(quantity)}
@@ -428,6 +432,11 @@ class FazerCardClient:
                 {"id": "amazon_us", "name": "Amazon (US)"},
                 {"id": "steam", "name": "Steam"},
             ], "meta": {"has_more": False, "next_cursor": None}}
+        if path.endswith("/telegram/stars"):
+            return {
+                "ok": True, "kind": "telegram_stars",
+                "price_per_star": "0.0152600", "min_amount": 50, "max_amount": 10000,
+            }
         if path.endswith("/stars/buy") or path.endswith("/premium/buy"):
             return {"ok": True, "order": {"id": "tg-mock", "status": "completed"}}
         if path.endswith("/order"):

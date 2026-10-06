@@ -80,6 +80,9 @@ class AdminUI(StatesGroup):
     steam_markup = State()
     steam_min = State()
     steam_max = State()
+    stars_markup = State()
+    stars_min = State()
+    stars_max = State()
     fzr_search = State()
     fzr_price = State()
 
@@ -137,6 +140,7 @@ def _panel_kb() -> InlineKeyboardMarkup:
     kb.row(_btn("🎨 Оформление", "ap_home"), _btn("👥 Рефералы", "rf_home"))
     kb.row(_btn("💱 Курс USDT→₽", "a_rate"), _btn("🛡 VPN", "vpn_home"))
     kb.row(_btn("💳 Пополнение Steam", "steam_home"))
+    kb.row(_btn("⭐ Телеграм Звёзды", "stars_home"))
     kb.row(_btn("⬅️ Меню", "menu"))
     return kb.as_markup()
 
@@ -547,6 +551,136 @@ async def msg_steam_max(message: Message, db: Database, state: FSMContext) -> No
     kb = InlineKeyboardBuilder()
     kb.row(_btn("⬅️ К Steam", "steam_home"))
     await message.answer(f"✅ Макс. заказ Steam: {_fmt_rub(val)} ₽", reply_markup=kb.as_markup())
+
+
+# ── Telegram Звёзды (наценка, лимиты количества) ───────────────────────────────
+@router.callback_query(F.data == "stars_home")
+async def cb_stars_home(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    await state.clear()
+    from ..services import stars as stars_service
+    from ..services import settings as settings_service
+    async with db.session() as session:
+        markup = await stars_service.get_markup(session)
+        lo_raw = await settings_service.get(session, settings_service.STARS_MIN_QTY)
+        hi_raw = await settings_service.get(session, settings_service.STARS_MAX_QTY)
+    lo_lbl = f"{lo_raw} ⭐️" if lo_raw else "авто"
+    hi_lbl = f"{hi_raw} ⭐️" if hi_raw else "авто"
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn(f"📈 Наценка: {_fmt_rub(markup)}%", "stars_markup"))
+    kb.row(
+        _btn(f"⬇️ Мин: {lo_lbl}", "stars_min"),
+        _btn(f"⬆️ Макс: {hi_lbl}", "stars_max"),
+    )
+    kb.row(_btn("⬅️ Назад", "a_home"))
+    await call.message.edit_text(
+        "⭐️ <b>Telegram Звёзды</b>\n\n"
+        f"Наценка: <b>{_fmt_rub(markup)}%</b>\n"
+        f"Лимит количества: <b>{lo_lbl} — {hi_lbl}</b>\n\n"
+        "Клиент сам вводит количество звёзд; цена в ₽ считается от себестоимости "
+        "FazerCards (живая котировка) + наценка. «авто» — брать лимиты из "
+        "котировки поставщика (50–10000).",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+def _parse_pos_int(text: Optional[str]) -> Optional[int]:
+    raw = (text or "").strip().replace(" ", "")
+    try:
+        v = int(raw)
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
+
+@router.callback_query(F.data == "stars_markup")
+async def cb_stars_markup(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminUI.stars_markup)
+    await call.message.edit_text(
+        "📈 Пришлите наценку в % (например <code>10</code>).",
+        reply_markup=_cancel_kb("stars_home"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.stars_markup)
+async def msg_stars_markup(message: Message, db: Database, state: FSMContext) -> None:
+    val = _parse_pos_decimal(message.text, allow_zero=True)
+    if val is None:
+        await message.answer("Введите число ≥ 0, например 10")
+        return
+    from ..services import settings as settings_service
+    async with db.session() as session:
+        await settings_service.set(session, settings_service.STARS_MARKUP, str(val))
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К Звёздам", "stars_home"))
+    await message.answer(f"✅ Наценка звёзд: {_fmt_rub(val)}%", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data == "stars_min")
+async def cb_stars_min(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminUI.stars_min)
+    await call.message.edit_text(
+        "⬇️ Пришлите <b>минимальное</b> количество звёзд (например <code>50</code>).\n"
+        "Отправьте <code>0</code>, чтобы брать лимит из котировки поставщика.",
+        reply_markup=_cancel_kb("stars_home"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.stars_min)
+async def msg_stars_min(message: Message, db: Database, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    from ..services import settings as settings_service
+    if raw == "0":
+        value, label = "", "авто"
+    else:
+        v = _parse_pos_int(raw)
+        if v is None:
+            await message.answer("Введите положительное целое число, например 50 (или 0 — авто)")
+            return
+        value, label = str(v), f"{v} ⭐️"
+    async with db.session() as session:
+        await settings_service.set(session, settings_service.STARS_MIN_QTY, value)
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К Звёздам", "stars_home"))
+    await message.answer(f"✅ Мин. количество звёзд: {label}", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data == "stars_max")
+async def cb_stars_max(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminUI.stars_max)
+    await call.message.edit_text(
+        "⬆️ Пришлите <b>максимальное</b> количество звёзд (например <code>10000</code>).\n"
+        "Отправьте <code>0</code>, чтобы брать лимит из котировки поставщика.",
+        reply_markup=_cancel_kb("stars_home"),
+    )
+    await call.answer()
+
+
+@router.message(AdminUI.stars_max)
+async def msg_stars_max(message: Message, db: Database, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    from ..services import settings as settings_service
+    if raw == "0":
+        value, label = "", "авто"
+    else:
+        v = _parse_pos_int(raw)
+        if v is None:
+            await message.answer("Введите положительное целое число, например 10000 (или 0 — авто)")
+            return
+        value, label = str(v), f"{v} ⭐️"
+    async with db.session() as session:
+        await settings_service.set(session, settings_service.STARS_MAX_QTY, value)
+        await session.commit()
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.row(_btn("⬅️ К Звёздам", "stars_home"))
+    await message.answer(f"✅ Макс. количество звёзд: {label}", reply_markup=kb.as_markup())
 
 
 # ── Товары ───────────────────────────────────────────────────────────────────

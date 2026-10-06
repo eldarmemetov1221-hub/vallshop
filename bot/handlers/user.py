@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from decimal import Decimal
 
 from aiogram import F, Router
@@ -29,6 +30,7 @@ from ..services import menu as menu_service
 from ..services import notify as notify_service
 from ..services import referral as referral_service
 from ..services import orders as order_service
+from ..services import stars as stars_service
 from ..services import steam as steam_service
 from ..services import stock as stock_service
 from ..services.balance import get_balance
@@ -56,6 +58,13 @@ class SteamFlow(StatesGroup):
     login = State()
     currency = State()
     amount = State()
+    confirming = State()
+
+
+class StarsFlow(StatesGroup):
+    """Telegram Звёзды: @username → количество → подтверждение."""
+    username = State()
+    quantity = State()
     confirming = State()
 
 
@@ -163,6 +172,10 @@ async def cb_product(
         if product.game == "STEAM_TOPUP":
             await _start_steam(call, db, state)
             return
+        # Спец-кнопка «Телеграм Звёзды» — свой флоу (@username → количество).
+        if product.game == "TG_STARS":
+            await _start_stars(call, db, state)
+            return
         parent_id = product.parent_id
         children = await catalog_service.list_children(session, product_id)
         prod_emoji = texts.ce(product.icon_emoji_id or "5298953332079999355", "🎮")
@@ -227,9 +240,13 @@ async def cb_variant(
             await call.answer("Недоступно", show_alert=True)
             return
         is_steam = variant.source == "fazercard" and variant.fzr_kind == "steam"
+        is_stars = variant.source == "fazercard" and variant.fzr_kind == "stars"
     if is_steam:
         # Steam-пополнение — свой флоу (логин → валюта → сумма).
         await _start_steam(call, db, state)
+        return
+    if is_stars:
+        await _start_stars(call, db, state)
         return
     async with db.session() as session:
         variant = await catalog_service.get_variant(session, variant_id)
@@ -331,8 +348,12 @@ async def cb_buy(
         variant = await catalog_service.get_variant(session, variant_id)
         needs_fields = bool(variant and variant.is_active and _needs_fields(variant))
         is_steam = bool(variant and variant.source == "fazercard" and variant.fzr_kind == "steam")
+        is_stars = bool(variant and variant.source == "fazercard" and variant.fzr_kind == "stars")
     if is_steam:
         await _start_steam(call, db, state)
+        return
+    if is_stars:
+        await _start_stars(call, db, state)
         return
     if needs_fields:
         await _start_topup(call, config, fzr, state, variant)
@@ -784,6 +805,186 @@ async def cb_steam_buy(
         await call.message.answer(
             texts.PURCHASE_PENDING.format(
                 item="Пополнение Steam", qty=1, total=texts.rub(price),
+                balance=texts.rub(balance), note=note,
+            ),
+            reply_markup=kb.after_purchase_kb(),
+        )
+    await call.answer("Готово ✅")
+
+
+# ── Telegram Звёзды (свободный выбор количества, умная цена) ──────────────────
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+
+
+def _stars_cancel_kb() -> InlineKeyboardBuilder:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="catalog"))
+    return b.as_markup()
+
+
+async def _stars_variant(session):
+    from sqlalchemy import select
+    from ..db.models import Product, Variant
+    pid = await session.scalar(select(Product.id).where(Product.game == "TG_STARS"))
+    if not pid:
+        return None
+    return await session.scalar(
+        select(Variant)
+        .where(Variant.product_id == pid, Variant.is_active.is_(True))
+        .order_by(Variant.sort_order)
+    )
+
+
+async def _start_stars(call: CallbackQuery, db: Database, state: FSMContext) -> None:
+    async with db.session() as session:
+        variant = await _stars_variant(session)
+    if not variant:
+        await call.answer("Telegram Звёзды сейчас недоступны", show_alert=True)
+        return
+    await state.set_state(StarsFlow.username)
+    await state.update_data(stvid=variant.id)
+    await call.message.answer(texts.STARS_ASK_USERNAME, reply_markup=_stars_cancel_kb())
+    await call.answer()
+
+
+@router.message(StarsFlow.username)
+async def msg_stars_username(
+    message: Message, db: Database, fzr: FazerCardClient, state: FSMContext
+) -> None:
+    uname = (message.text or "").strip().lstrip("@")
+    if not _USERNAME_RE.match(uname):
+        await message.answer(texts.STARS_USERNAME_BAD)
+        return
+    async with db.session() as session:
+        _pps, api_min, api_max = await stars_service.get_quote(fzr)
+        lo, hi = await stars_service.get_limits(session, api_min=api_min, api_max=api_max)
+    await state.update_data(username=uname)
+    await state.set_state(StarsFlow.quantity)
+    await message.answer(
+        texts.STARS_ASK_QTY.format(username="@" + uname, min=lo, max=hi),
+        reply_markup=_stars_cancel_kb(),
+    )
+
+
+@router.message(StarsFlow.quantity)
+async def msg_stars_quantity(
+    message: Message, db: Database, fzr: FazerCardClient, state: FSMContext
+) -> None:
+    raw = (message.text or "").strip().replace(" ", "")
+    try:
+        qty = int(raw)
+    except ValueError:
+        qty = None
+    if qty is None or qty <= 0:
+        await message.answer(texts.STARS_QTY_BAD)
+        return
+    data = await state.get_data()
+    uname = data.get("username", "")
+    async with db.session() as session:
+        pps, api_min, api_max = await stars_service.get_quote(fzr)
+        lo, hi = await stars_service.get_limits(session, api_min=api_min, api_max=api_max)
+        markup = await stars_service.get_markup(session)
+        balance = await get_balance(session, message.from_user.id)
+    if qty < lo or qty > hi:
+        await message.answer(texts.STARS_QTY_RANGE.format(min=lo, max=hi))
+        return
+    price = stars_service.price_rub(qty, pps, markup=markup)
+    c_usd = stars_service.cost_usd(qty, pps)
+    await state.update_data(qty=qty, price=str(price), cost_usd=str(c_usd))
+    await state.set_state(StarsFlow.confirming)
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text=f"✅ Оплатить {texts.rub(price)}", callback_data="stbuy"))
+    b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="catalog"))
+    await message.answer(
+        texts.STARS_CONFIRM.format(
+            username="@" + uname, qty=qty,
+            price=texts.rub(price), balance=texts.rub(balance),
+        ),
+        reply_markup=b.as_markup(),
+    )
+
+
+@router.callback_query(StarsFlow.confirming, F.data == "stbuy")
+async def cb_stars_buy(
+    call: CallbackQuery, db: Database, config: BotConfig, fzr: FazerCardClient,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    vid = data.get("stvid")
+    uname = data.get("username", "")
+    qty = int(data.get("qty", 0))
+    price = Decimal(data.get("price", "0"))
+    cost_usd = data.get("cost_usd", "0")
+    async with db.session() as session:
+        variant = await catalog_service.get_variant(session, vid)
+        if not variant or not variant.is_active:
+            await state.clear()
+            await call.answer("Недоступно", show_alert=True)
+            return
+        await order_service.ensure_user(
+            session, call.from_user.id, call.from_user.username, call.from_user.full_name
+        )
+        try:
+            order, _codes = await order_service.purchase_from_balance(
+                session, user_id=call.from_user.id, variant=variant,
+                unit_price=price, quantity=1, fzr=fzr,
+                topup_fields={
+                    "telegram_username": uname, "stars_qty": qty,
+                    "_cost_usd": cost_usd,
+                },
+            )
+        except InsufficientBalance:
+            await session.rollback()
+            await state.clear()
+            await call.message.answer(
+                texts.NOT_ENOUGH_BALANCE_MSG, reply_markup=kb.not_enough_balance_kb()
+            )
+            await call.answer()
+            return
+        except SupplierError:
+            await session.rollback()
+            await notify_service.notify_admins(
+                call.message.bot, config.admin_ids,
+                f"⚠️ Поставщик отклонил заказ звёзд (@{uname}, {qty} ⭐️). "
+                "Деньги покупателю не списаны.",
+            )
+            await call.answer(
+                "😔 Поставщик временно недоступен, деньги не списаны.", show_alert=True
+            )
+            return
+        order.fields_json = json.dumps(
+            [
+                {"label": "Получатель", "value": "@" + uname},
+                {"label": "Количество", "value": f"{qty} ⭐️"},
+            ],
+            ensure_ascii=False,
+        )
+        status = order.status
+        order_id = order.id
+        pending_note = await catalog_service.resolve_text(
+            session, variant, "pending_text", texts.PENDING_NOTE_DEFAULT
+        )
+        await session.commit()
+        balance = await get_balance(session, call.from_user.id)
+
+    await state.clear()
+    if status == OrderStatus.NEEDS_ACTION:
+        await notify_service.notify_admins(
+            call.message.bot, config.admin_ids,
+            f"❗️ Заказ звёзд #{order_id} (@{uname}, {qty} ⭐️) требует ручной обработки.\n"
+            "Откройте «Админ-панель → Текущие заказы → Не выполненные».",
+        )
+    done_kb = kb.order_done_kb(order_id, vid)
+    if status == OrderStatus.COMPLETED:
+        await call.message.answer(
+            texts.STARS_DELIVERED.format(username="@" + uname, qty=qty),
+            reply_markup=done_kb,
+        )
+    else:
+        note = f"\n\n{pending_note}" if pending_note else ""
+        await call.message.answer(
+            texts.PURCHASE_PENDING.format(
+                item="Telegram Звёзды", qty=1, total=texts.rub(price),
                 balance=texts.rub(balance), note=note,
             ),
             reply_markup=kb.after_purchase_kb(),

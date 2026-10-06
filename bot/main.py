@@ -139,6 +139,47 @@ async def _seed_steam_category(db: Database) -> None:
     log.info("Кнопка «Пополнить Steam» создана")
 
 
+async def _seed_stars_category(db: Database) -> None:
+    """Разово создать кнопку «Телеграм Звёзды» (товар + номинал-сервис).
+
+    Товар с game="TG_STARS" — спец-кнопка: тап ведёт в свой флоу
+    (@username → количество). Номинал нужен для привязки заказа и выдачи
+    (source="fazercard", fzr_kind="stars", fzr_a="telegram_stars").
+    """
+    from .db.models import Product, Variant
+    from .services import settings as settings_service
+
+    async with db.session() as session:
+        if await settings_service.get(session, "stars_category_seeded"):
+            return
+        p = Product(
+            game="TG_STARS",
+            title="Телеграм Звёзды",
+            parent_id=None,
+            is_active=True,
+            icon_emoji_id="5886685105065300941",
+            button_style="primary",
+            full_width=True,
+            sort_order=91,  # сразу под «Пополнить Steam» (90)
+        )
+        session.add(p)
+        await session.flush()
+        session.add(Variant(
+            product_id=p.id,
+            title="Telegram Звёзды",
+            liog_product_id=0,
+            liog_variation_id=-1,
+            cost_usd=0,
+            source="fazercard",
+            fzr_kind="stars",
+            fzr_a="telegram_stars",  # маршрутизация выдачи на эндпоинт звёзд
+            is_active=True,
+        ))
+        await settings_service.set(session, "stars_category_seeded", "1")
+        await session.commit()
+    log.info("Кнопка «Телеграм Звёзды» создана")
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -156,6 +197,7 @@ async def main() -> None:
     await _migrate_to_rub(db, rates_service.get_rate())  # разовая конвертация балансов
     await _seed_vpn_category(db)  # разовое создание категории «VPN | VallShop»
     await _seed_steam_category(db)  # разовое создание кнопки «Пополнить Steam»
+    await _seed_stars_category(db)  # разовое создание кнопки «Телеграм Звёзды»
 
     provider = build_provider(config)
     payhot = build_payhot(config)

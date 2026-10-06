@@ -191,8 +191,8 @@ async def _fulfill_fazercard(
     kind = variant.fzr_kind
     fields = topup_fields or {}
 
-    # Steam-пополнение: себестоимость плавающая — сохраняем её в заказ.
-    if kind == "steam" and fields.get("_cost_usd"):
+    # Steam / Звёзды: себестоимость плавающая — сохраняем её в заказ.
+    if kind in ("steam", "stars") and fields.get("_cost_usd"):
         try:
             order.cost_usd = Decimal(str(fields["_cost_usd"]))
         except (InvalidOperation, ValueError, TypeError):
@@ -203,7 +203,13 @@ async def _fulfill_fazercard(
         # Telegram Stars / Premium — спец-эндпоинты с получателем (username).
         if variant.fzr_a == "telegram_stars":
             uname = (fields.get("telegram_username") or "").strip()
-            amount = _first_int(variant.title)
+            # Свободный выбор количества (новый флоу) — число в fields;
+            # иначе фикс-пак: количество из названия номинала.
+            amount = fields.get("stars_qty") or _first_int(variant.title)
+            try:
+                amount = int(amount) if amount else None
+            except (TypeError, ValueError):
+                amount = None
             if not uname:
                 raise SupplierError("Не указан Telegram @username получателя")
             if not amount:
