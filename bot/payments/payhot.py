@@ -92,6 +92,37 @@ class PayHotProvider(PaymentProvider):
                     return data[key]
         return data if isinstance(data, dict) else {}
 
+    _URL_KEYS = ("url", "checkout_url", "payment_url", "redirect_url",
+                 "pay_url", "confirmation_url", "link", "href")
+
+    @classmethod
+    def _extract_url(cls, d, _depth: int = 0):
+        """Найти ссылку на оплату в ответе (разные провайдеры кладут её по-разному)."""
+        if not isinstance(d, dict) or _depth > 4:
+            return None
+        # сначала известные контейнеры
+        for container in ("checkout", "confirmation", "payment", "data", "links"):
+            v = d.get(container)
+            if isinstance(v, str) and v.startswith("http"):
+                return v
+            if isinstance(v, dict):
+                u = cls._extract_url(v, _depth + 1)
+                if u:
+                    return u
+        for k in cls._URL_KEYS:
+            v = d.get(k)
+            if isinstance(v, str) and v.startswith("http"):
+                return v
+        # запасной путь: любое строковое значение-URL
+        for v in d.values():
+            if isinstance(v, str) and v.startswith("http"):
+                return v
+            if isinstance(v, dict):
+                u = cls._extract_url(v, _depth + 1)
+                if u:
+                    return u
+        return None
+
     async def _request(self, method: str, path: str, *, json_body=None, idem=None) -> dict:
         if httpx is None:
             raise RuntimeError("Пакет 'httpx' не установлен")
@@ -133,24 +164,29 @@ class PayHotProvider(PaymentProvider):
         }
 
         if self.mock:
-            d = {
+            full = {
                 "id": f"ph-mock-{client_ref}",
                 "checkout": {"url": (success_url or "https://pay.hot/mock") + f"?ref={client_ref}"},
                 "status": "requires_payment_method",
             }
         else:
-            d = self._unwrap(await self._request("POST", "/payments", json_body=body, idem=client_ref))
+            full = await self._request("POST", "/payments", json_body=body, idem=client_ref)
+            # Разовый лог структуры ответа (без секретов) — чтобы точно знать поля.
+            try:
+                log.info("PayHot payment created: %s", json.dumps(full, ensure_ascii=False)[:800])
+            except Exception:  # noqa: BLE001
+                pass
 
-        checkout = d.get("checkout") if isinstance(d.get("checkout"), dict) else {}
+        d = self._unwrap(full)
         return Invoice(
-            provider_order_id=str(d.get("id") or client_ref),
-            checkout_url=(checkout.get("url") or d.get("checkout_url")),
+            provider_order_id=str(d.get("id") or full.get("id") or client_ref),
+            checkout_url=self._extract_url(full),
             address=None,
             network=method,
             amount=Decimal(amount),
             currency="RUB",
             expires_at=None,
-            raw=d,
+            raw=full,
         )
 
     async def get_status(self, ref: str) -> PaymentUpdate:
